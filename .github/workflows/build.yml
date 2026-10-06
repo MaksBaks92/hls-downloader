@@ -3,11 +3,12 @@ name: Build
 on:
   push:
     branches: [main, master]
+    tags: ["v*"]
   pull_request:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   windows:
@@ -40,11 +41,16 @@ jobs:
       - name: PyInstaller
         run: pyinstaller --noconfirm hls_downloader.spec
 
+      - name: Pack zip
+        shell: pwsh
+        run: |
+          Compress-Archive -Path "dist\HLS Downloader\*" -DestinationPath "HLS-Downloader-windows.zip" -Force
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: HLS-Downloader-windows
-          path: dist/HLS Downloader
+          path: HLS-Downloader-windows.zip
 
   linux:
     name: Linux
@@ -82,8 +88,42 @@ jobs:
       - name: PyInstaller
         run: pyinstaller --noconfirm hls_downloader.spec
 
+      - name: Pack zip
+        run: |
+          (cd "dist/HLS Downloader" && zip -r "$GITHUB_WORKSPACE/HLS-Downloader-linux.zip" .)
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: HLS-Downloader-linux
-          path: dist/HLS Downloader
+          path: HLS-Downloader-linux.zip
+
+  release:
+    name: Publish release
+    needs: [windows, linux]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Windows zip
+        uses: actions/download-artifact@v4
+        with:
+          name: HLS-Downloader-windows
+          path: dist
+
+      - name: Download Linux zip
+        uses: actions/download-artifact@v4
+        with:
+          name: HLS-Downloader-linux
+          path: dist
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/HLS-Downloader-windows.zip
+            dist/HLS-Downloader-linux.zip
+          generate_release_notes: true
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
