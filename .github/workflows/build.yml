@@ -77,12 +77,18 @@ jobs:
           mkdir -p bin
           curl -L "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp" -o bin/yt-dlp
           chmod +x bin/yt-dlp
-          curl -L "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz" -o ffmpeg.tar.xz
-          mkdir -p ffmpeg-extract
-          tar -xJf ffmpeg.tar.xz -C ffmpeg-extract
-          FFMPEG_BIN="$(find ffmpeg-extract -type f -name ffmpeg | head -n 1)"
-          test -n "$FFMPEG_BIN"
-          cp "$FFMPEG_BIN" bin/ffmpeg
+          # BtbN "latest" tag can 404 intermittently — prefer apt static binary.
+          if curl -fsSL "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz" -o ffmpeg.tar.xz \
+            && tar -tJf ffmpeg.tar.xz >/dev/null 2>&1; then
+            mkdir -p ffmpeg-extract
+            tar -xJf ffmpeg.tar.xz -C ffmpeg-extract
+            FFMPEG_BIN="$(find ffmpeg-extract -type f -name ffmpeg | head -n 1)"
+            test -n "$FFMPEG_BIN"
+            cp "$FFMPEG_BIN" bin/ffmpeg
+          else
+            sudo apt-get install -y ffmpeg
+            cp "$(command -v ffmpeg)" bin/ffmpeg
+          fi
           chmod +x bin/ffmpeg
 
       - name: PyInstaller
