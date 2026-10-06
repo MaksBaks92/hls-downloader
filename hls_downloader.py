@@ -1997,19 +1997,19 @@ def looks_like_video_url(text: str) -> bool:
 def friendly_download_error(message: str) -> str:
     text = (message or "").strip()
     lower = text.lower()
-    if "video has been deleted" in lower or "удалено с eporner" in lower:
+    if "video has been deleted" in lower or "удалено с eporner" in lower or "deleted on eporner" in lower:
         return text.splitlines()[0][:200]
     if "unable to extract hash" in lower:
-        return "Не удалось разобрать страницу (видео удалено или недоступно)."
+        return _("err_hash")
     if "http error 403" in lower or "forbidden" in lower:
-        return "Доступ запрещён (403). Нужны cookies / другой UA / прокси."
+        return _("err_403")
     if "http error 404" in lower or "not found" in lower:
-        return "Ссылка не найдена (404)."
+        return _("err_404")
     if "timed out" in lower or "timeout" in lower:
-        return "Таймаут сети. Проверьте интернет или прокси."
-    if "ffmpeg" in lower and "не найден" in lower:
+        return _("err_timeout")
+    if "ffmpeg" in lower and ("не найден" in lower or "not found" in lower):
         return text.splitlines()[0][:200]
-    first = text.splitlines()[0].strip() if text else "Ошибка скачивания"
+    first = text.splitlines()[0].strip() if text else _("error_download")
     return first[:200]
 
 
@@ -2088,10 +2088,10 @@ def eporner_unavailable_reason(body: str) -> str | None:
     lower = (body or "").lower()
     if 'id="deletedfile"' in lower or "video has been deleted" in lower:
         if "copyright" in lower:
-            return "Видео удалено с eporner (запрос правообладателя)."
-        return "Видео удалено с eporner."
+            return _("err_deleted_eporner_copy")
+        return _("err_deleted_eporner")
     if "file has been removed" in lower:
-        return "Видео удалено с eporner."
+        return _("err_deleted_eporner")
     return None
 
 
@@ -4813,6 +4813,256 @@ UI_FONT = "Segoe UI"
 UI_FONT_SEMI = "Segoe UI Semibold"
 UI_ICON_FONT = "Segoe MDL2 Assets"
 
+LANG_RU = "ru"
+LANG_EN = "en"
+LANG_NAMES = {LANG_RU: "Русский", LANG_EN: "English"}
+_CURRENT_LANG = LANG_RU
+
+I18N: dict[str, dict[str, str]] = {
+    LANG_RU: {
+        "settings_sub": "Внешний вид, язык, прокси, User-Agent и cookies",
+        "settings": "Настройки",
+        "clear": "Очистить",
+        "history": "История",
+        "app_title": "HLS Загрузчик",
+        "proxy_off": "Прокси: выкл",
+        "proxy_on": "Прокси · {proxy}",
+        "url_placeholder": "Вставьте ссылку на видео…  Ctrl+V",
+        "add": "Добавить",
+        "stop": "Стоп",
+        "empty_title": "Очередь пуста",
+        "empty_hint": "YouTube · VK · Rutube · Chaturbate · HLS\nВставьте ссылку сверху и нажмите Добавить",
+        "ready": "Готово",
+        "queue": "Очередь",
+        "queue_count": "В очереди: {n}",
+        "theme_to_light": "Светлая тема",
+        "theme_to_dark": "Тёмная тема",
+        "theme_icon_to_light": "☀",
+        "theme_icon_to_dark": "☾",
+        "language": "Язык",
+        "quality": "Качество",
+        "download": "Скачать",
+        "audio": "Аудио",
+        "reparse": "Спарсить снова",
+        "retry_download": "Повторить скачивание",
+        "fetching": "Получение метаданных…",
+        "ready_download": "Готово к скачиванию",
+        "ready_best": "Готово к скачиванию · выбрано максимальное качество",
+        "stopping": "Останавливаю…",
+        "stopped": "Остановлено",
+        "recording": "Запись эфира…",
+        "downloading": "Скачиваю…",
+        "recording_saved": "Запись сохранена",
+        "toast_done": "Готово",
+        "toast_error": "Ошибка",
+        "error_download": "Ошибка скачивания",
+        "no_link": "Нет ссылки",
+        "no_link_body": "Вставьте одну или несколько ссылок.",
+        "paste": "Вставить",
+        "copy": "Копировать",
+        "cut": "Вырезать",
+        "history_title": "История загрузок",
+        "history_empty": "История пуста",
+        "history_records": "{n} записей",
+        "open_folder": "Открыть папку",
+        "download_again": "Скачать снова",
+        "clear_history": "Очистить историю",
+        "close": "Закрыть",
+        "cancel": "Отмена",
+        "save": "Сохранить",
+        "done": "Готово",
+        "browse": "Обзор",
+        "remove": "Убрать",
+        "general": "Основные",
+        "theme": "Тема",
+        "theme_dark": "Тёмная",
+        "theme_light": "Светлая",
+        "folder": "Папка",
+        "threads_hls": "Потоки HLS",
+        "threads_mp4": "Потоки MP4",
+        "seconds_test": "Секунд (тест)",
+        "threads_help": "HLS — сегменты/yt-dlp (обычно 16–24). MP4 — параллель для mixdrop/mxcontent (лучше 8–12).",
+        "remember_geometry": "Запоминать размер и положение окна после закрытия",
+        "auto_clipboard": "Подставлять ссылку из буфера при фокусе окна",
+        "notify": "Звук и всплывающее уведомление по завершении",
+        "proxy_section": "Прокси · HTTP / HTTPS / SOCKS5",
+        "proxy_help": "Выберите тип, затем вставьте адрес. Логин и пароль — по желанию.",
+        "ua_section": "User-Agent",
+        "ua_help": "Пресет или свой UA. Случайный — новый на каждое видео.",
+        "preset": "Пресет",
+        "random_ua": "Случайный User-Agent на каждое новое видео (+ повтор при блоке)",
+        "random_ua_help": "Сайты часто режут один UA после серии запросов. Случайный режим крутит UA и TLS-профиль.",
+        "random_ua_placeholder": "(на каждое видео свой User-Agent)",
+        "cookies": "Cookies",
+        "cookies_help": "Файл cookies.txt (Netscape) — для приватных / age-gate / «Sign in to confirm».",
+        "advanced": "Дополнительно",
+        "referer": "Referer",
+        "filename": "Имя файла",
+        "extra_headers": "Доп. заголовки",
+        "insecure": "Не проверять SSL",
+        "clipboard_link": "Ссылка из буфера",
+        "exit_title": "Выход",
+        "exit_busy": "Скачивание ещё идёт. Остановить и закрыть?",
+        "clear_title": "Очистить",
+        "clear_ask": "Удалить все карточки и очистить историю?",
+        "clear_ask_busy": "Идёт скачивание. Удалить только завершённые и очистить историю?\n(Текущие загрузки останутся.)",
+        "cleared": "Список и история очищены",
+        "history_cleared": "История очищена",
+        "history_clear_ask": "Очистить всю историю загрузок?",
+        "history_no_url": "У записи нет ссылки.",
+        "reparsing": "Повторный парсинг… {url}",
+        "best_quality": "Максимальное (лучшее)",
+        "audio_all": "Аудио: все ({n})",
+        "audio_one": "Аудио: {name}",
+        "audio_n": "Аудио: {names}",
+        "audio_btn": "Аудио ({sel}/{total})",
+        "audio_pick": "Аудио",
+        "audio_need": "Выберите хотя бы одну дорожку.",
+        "playlist": "Плейлист",
+        "playlist_need": "Выберите хотя бы одно видео.",
+        "playlist_add": "Добавить выбранные",
+        "playlist_meta": "Плейлист: {n} видео — выберите что скачать",
+        "playlist_empty": "В плейлисте нет видео",
+        "err_deleted_eporner_copy": "Видео удалено с eporner (запрос правообладателя).",
+        "err_deleted_eporner": "Видео удалено с eporner.",
+        "err_hash": "Не удалось разобрать страницу (видео удалено или недоступно).",
+        "err_403": "Доступ запрещён (403). Нужны cookies / другой UA / прокси.",
+        "err_404": "Ссылка не найдена (404).",
+        "err_timeout": "Таймаут сети. Проверьте интернет или прокси.",
+    },
+    LANG_EN: {
+        "settings_sub": "Appearance, language, proxy, User-Agent and cookies",
+        "settings": "Settings",
+        "clear": "Clear",
+        "history": "History",
+        "app_title": "HLS Downloader",
+        "proxy_off": "Proxy: off",
+        "proxy_on": "Proxy · {proxy}",
+        "url_placeholder": "Paste a video link…  Ctrl+V",
+        "add": "Add",
+        "stop": "Stop",
+        "empty_title": "Queue is empty",
+        "empty_hint": "YouTube · VK · Rutube · Chaturbate · HLS\nPaste a link above and click Add",
+        "ready": "Ready",
+        "queue": "Queue",
+        "queue_count": "In queue: {n}",
+        "theme_to_light": "Light theme",
+        "theme_to_dark": "Dark theme",
+        "theme_icon_to_light": "☀",
+        "theme_icon_to_dark": "☾",
+        "language": "Language",
+        "quality": "Quality",
+        "download": "Download",
+        "audio": "Audio",
+        "reparse": "Parse again",
+        "retry_download": "Retry download",
+        "fetching": "Fetching metadata…",
+        "ready_download": "Ready to download",
+        "ready_best": "Ready to download · best quality selected",
+        "stopping": "Stopping…",
+        "stopped": "Stopped",
+        "recording": "Recording live…",
+        "downloading": "Downloading…",
+        "recording_saved": "Recording saved",
+        "toast_done": "Done",
+        "toast_error": "Error",
+        "error_download": "Download failed",
+        "no_link": "No link",
+        "no_link_body": "Paste one or more links.",
+        "paste": "Paste",
+        "copy": "Copy",
+        "cut": "Cut",
+        "history_title": "Download history",
+        "history_empty": "History is empty",
+        "history_records": "{n} records",
+        "open_folder": "Open folder",
+        "download_again": "Download again",
+        "clear_history": "Clear history",
+        "close": "Close",
+        "cancel": "Cancel",
+        "save": "Save",
+        "done": "Done",
+        "browse": "Browse",
+        "remove": "Remove",
+        "general": "General",
+        "theme": "Theme",
+        "theme_dark": "Dark",
+        "theme_light": "Light",
+        "folder": "Folder",
+        "threads_hls": "HLS threads",
+        "threads_mp4": "MP4 threads",
+        "seconds_test": "Seconds (test)",
+        "threads_help": "HLS — segments/yt-dlp (usually 16–24). MP4 — parallel for mixdrop/mxcontent (8–12).",
+        "remember_geometry": "Remember window size and position on close",
+        "auto_clipboard": "Fill URL from clipboard when the window focuses",
+        "notify": "Sound and toast notification when finished",
+        "proxy_section": "Proxy · HTTP / HTTPS / SOCKS5",
+        "proxy_help": "Pick a type, then paste the address. Login/password optional.",
+        "ua_section": "User-Agent",
+        "ua_help": "Preset or custom UA. Random — a new one for every video.",
+        "preset": "Preset",
+        "random_ua": "Random User-Agent for every new video (+ retry on block)",
+        "random_ua_help": "Sites often soft-ban one UA after many requests. Random mode rotates UA and TLS profile.",
+        "random_ua_placeholder": "(a unique User-Agent per video)",
+        "cookies": "Cookies",
+        "cookies_help": "cookies.txt (Netscape) — for private / age-gate / “Sign in to confirm”.",
+        "advanced": "Advanced",
+        "referer": "Referer",
+        "filename": "Filename",
+        "extra_headers": "Extra headers",
+        "insecure": "Skip SSL verify",
+        "clipboard_link": "Link from clipboard",
+        "exit_title": "Exit",
+        "exit_busy": "A download is still running. Stop and close?",
+        "clear_title": "Clear",
+        "clear_ask": "Remove all cards and clear history?",
+        "clear_ask_busy": "A download is running. Remove finished items and clear history?\n(Active downloads will stay.)",
+        "cleared": "List and history cleared",
+        "history_cleared": "History cleared",
+        "history_clear_ask": "Clear all download history?",
+        "history_no_url": "This record has no URL.",
+        "reparsing": "Parsing again… {url}",
+        "best_quality": "Best (maximum)",
+        "audio_all": "Audio: all ({n})",
+        "audio_one": "Audio: {name}",
+        "audio_n": "Audio: {names}",
+        "audio_btn": "Audio ({sel}/{total})",
+        "audio_pick": "Audio",
+        "audio_need": "Select at least one audio track.",
+        "playlist": "Playlist",
+        "playlist_need": "Select at least one video.",
+        "playlist_add": "Add selected",
+        "playlist_meta": "Playlist: {n} videos — pick what to download",
+        "playlist_empty": "No videos in playlist",
+        "err_deleted_eporner_copy": "Video deleted on eporner (copyright request).",
+        "err_deleted_eporner": "Video deleted on eporner.",
+        "err_hash": "Could not parse the page (video deleted or unavailable).",
+        "err_403": "Access denied (403). Try cookies / another UA / proxy.",
+        "err_404": "Link not found (404).",
+        "err_timeout": "Network timeout. Check internet or proxy.",
+    },
+}
+
+
+def set_language(lang: str) -> None:
+    global _CURRENT_LANG
+    _CURRENT_LANG = lang if lang in I18N else LANG_RU
+
+
+def current_language() -> str:
+    return _CURRENT_LANG if _CURRENT_LANG in I18N else LANG_RU
+
+
+def _(key: str, **kwargs) -> str:
+    lang = current_language()
+    text = I18N.get(lang, {}).get(key) or I18N[LANG_RU].get(key) or key
+    if kwargs:
+        try:
+            return text.format(**kwargs)
+        except (KeyError, ValueError):
+            return text
+    return text
+
 
 def configure_ttk_style(theme: dict) -> None:
     style = ttk.Style()
@@ -5039,7 +5289,7 @@ class AudioTrackPickerDialog(tk.Toplevel):
         footer.pack(side="bottom", fill="x", padx=16, pady=(8, 14))
         tk.Button(
             footer,
-            text="Готово",
+            text=_("done"),
             command=self._confirm,
             bg=theme["accent"],
             fg=theme["accent_text"],
@@ -5052,7 +5302,7 @@ class AudioTrackPickerDialog(tk.Toplevel):
             cursor="hand2",
             bd=0,
         ).pack(side="right")
-        ttk.Button(footer, text="Отмена", command=self._cancel).pack(side="right", padx=(0, 8))
+        ttk.Button(footer, text=_("cancel"), command=self._cancel).pack(side="right", padx=(0, 8))
 
         tk.Label(
             self,
@@ -5154,7 +5404,7 @@ class AudioTrackPickerDialog(tk.Toplevel):
     def _confirm(self) -> None:
         selected = self._selected_tracks()
         if not selected:
-            messagebox.showinfo("Аудио", "Выберите хотя бы одну дорожку.", parent=self)
+            messagebox.showinfo(_("audio_pick"), _("audio_need"), parent=self)
             return
         self.result = selected
         self.destroy()
@@ -5241,8 +5491,8 @@ class PlaylistPickerDialog(tk.Toplevel):
 
         footer = tk.Frame(self, bg=theme["bg"])
         footer.pack(fill="x", padx=16, pady=(4, 14))
-        ttk.Button(footer, text="Отмена", command=self._cancel).pack(side="right")
-        ttk.Button(footer, text="Добавить выбранные", command=self._confirm).pack(side="right", padx=(0, 8))
+        ttk.Button(footer, text=_("cancel"), command=self._cancel).pack(side="right")
+        ttk.Button(footer, text=_("playlist_add"), command=self._confirm).pack(side="right", padx=(0, 8))
         self._update_count()
         self.protocol("WM_DELETE_WINDOW", self._cancel)
         self.bind("<Escape>", lambda _e: self._cancel())
@@ -5273,7 +5523,7 @@ class PlaylistPickerDialog(tk.Toplevel):
     def _confirm(self) -> None:
         selected = [entry for entry, var in zip(self.entries, self.vars) if var.get()]
         if not selected:
-            messagebox.showinfo("Плейлист", "Выберите хотя бы одно видео.", parent=self)
+            messagebox.showinfo(_("playlist"), _("playlist_need"), parent=self)
             return
         self.result = selected
         self.destroy()
@@ -5352,19 +5602,20 @@ class DownloadCard(tk.Frame):
 
         self.configure_frame = tk.Frame(mid, bg=theme["card"])
         self.configure_frame.pack(fill="x")
-        tk.Label(
+        self.quality_label = tk.Label(
             self.configure_frame,
-            text="Качество",
+            text=_("quality"),
             bg=theme["card"],
             fg=theme["muted"],
             font=(UI_FONT, 9),
-        ).pack(side="left")
-        self.quality_var = tk.StringVar(value="Максимальное (лучшее)")
+        )
+        self.quality_label.pack(side="left")
+        self.quality_var = tk.StringVar(value=_("best_quality"))
         self.quality_box = ttk.Combobox(
             self.configure_frame,
             textvariable=self.quality_var,
             state="readonly",
-            values=["Максимальное (лучшее)"],
+            values=[_("best_quality")],
             width=26,
             style="Metro.TCombobox",
         )
@@ -5372,7 +5623,7 @@ class DownloadCard(tk.Frame):
         self.quality_box.current(0)
         self.audio_btn = tk.Button(
             self.configure_frame,
-            text="Аудио",
+            text=_("audio_pick"),
             command=self._pick_audio,
             bg=theme["chip"],
             fg=theme["text"],
@@ -5387,7 +5638,7 @@ class DownloadCard(tk.Frame):
         )
         self.download_btn = tk.Button(
             self.configure_frame,
-            text="Скачать",
+            text=_("download"),
             command=self._start_download,
             bg=theme["accent"],
             fg=theme["accent_text"],
@@ -5421,7 +5672,7 @@ class DownloadCard(tk.Frame):
         self.retry_row = tk.Frame(self.progress_frame, bg=theme["card"])
         self.retry_btn = tk.Button(
             self.retry_row,
-            text="Спарсить снова",
+            text=_("reparse"),
             command=self._retry,
             bg=theme["accent"],
             fg=theme["accent_text"],
@@ -5503,8 +5754,8 @@ class DownloadCard(tk.Frame):
             except tk.TclError:
                 pass
         self.progress_frame.pack_forget()
-        self.meta_var.set("Получение метаданных…")
-        self.download_btn.configure(text="Скачать", state="disabled", command=self._start_download)
+        self.meta_var.set(_("fetching"))
+        self.download_btn.configure(text=_("download"), state="disabled", command=self._start_download)
         self._set_btn_enabled(self.btn_download, False)
         self.btn_download.configure(text="↓")
         self.btn_download._command = self._start_download  # type: ignore[attr-defined]
@@ -5524,7 +5775,7 @@ class DownloadCard(tk.Frame):
         self.configure_frame.pack(fill="x")
         self._refresh_audio_button()
         self._update_audio_meta()
-        self.download_btn.configure(text="Скачать", state="normal", command=self._start_download)
+        self.download_btn.configure(text=_("download"), state="normal", command=self._start_download)
         self._set_btn_enabled(self.btn_download, True)
         self.btn_download.configure(text="↓")
         self.btn_download._command = self._start_download  # type: ignore[attr-defined]
@@ -5559,23 +5810,23 @@ class DownloadCard(tk.Frame):
     def _update_audio_meta(self) -> None:
         if len(self.audio_tracks) <= 1:
             self.meta_var.set(
-                "Готово к скачиванию · выбрано максимальное качество"
+                _("ready_best")
                 if self.quality_box.current() == 0
-                else "Готово к скачиванию"
+                else _("ready_download")
             )
             return
         selected = self.selected_audio_tracks()
         if len(selected) == len(self.audio_tracks):
-            audio_txt = f"Аудио: все ({len(selected)})"
+            audio_txt = _("audio_all", n=len(selected))
         elif len(selected) == 1:
-            audio_txt = f"Аудио: {selected[0].get('label') or selected[0].get('language')}"
+            audio_txt = _("audio_one", name=selected[0].get("label") or selected[0].get("language"))
         else:
             names = ", ".join(str(t.get("language") or t.get("label")) for t in selected[:4])
             if len(selected) > 4:
                 names += f" +{len(selected) - 4}"
-            audio_txt = f"Аудио: {names}"
+            audio_txt = _("audio_n", names=names)
         self.meta_var.set(audio_txt)
-        self.audio_btn.configure(text=f"Аудио ({len(selected)}/{len(self.audio_tracks)})")
+        self.audio_btn.configure(text=_("audio_btn", sel=len(selected), total=len(self.audio_tracks)))
 
     def _pick_audio(self) -> None:
         if len(self.audio_tracks) <= 1:
@@ -5654,6 +5905,27 @@ class DownloadCard(tk.Frame):
             self._set_btn_enabled(btn, bool(getattr(btn, "_enabled", True)))
         self._paint_progress()
 
+    def apply_language(self) -> None:
+        self.quality_label.configure(text=_("quality"))
+        self.audio_btn.configure(text=_("audio_pick"))
+        if self.state in {"ready", "stop"}:
+            self.download_btn.configure(text=_("download"))
+            self._update_audio_meta()
+        elif self.state == "fetch":
+            self.meta_var.set(_("fetching"))
+            self.download_btn.configure(text=_("download"))
+        elif self.state == "err":
+            self.retry_btn.configure(text=_("reparse"))
+            if hasattr(self, "retry_download_btn"):
+                try:
+                    self.retry_download_btn.configure(text=_("retry_download"))
+                except tk.TclError:
+                    pass
+        elif self.state == "ok":
+            pass
+        elif self.state == "run":
+            pass
+
     def _recolor(self, widget: tk.Misc, color: str) -> None:
         try:
             if widget not in (
@@ -5730,7 +6002,7 @@ class DownloadCard(tk.Frame):
             or self.probe.get("qualities")
         )
         # Primary: re-parse same URL without pasting again.
-        self.retry_btn.configure(text="Спарсить снова", command=self._reparse, state="normal")
+        self.retry_btn.configure(text=_("reparse"), command=self._reparse, state="normal")
         self.retry_row.pack(fill="x")
         if hasattr(self, "retry_download_btn"):
             try:
@@ -5741,7 +6013,7 @@ class DownloadCard(tk.Frame):
             theme = self.app.theme
             self.retry_download_btn = tk.Button(
                 self.retry_row,
-                text="Повторить скачивание",
+                text=_("retry_download"),
                 command=self._retry_download,
                 bg=theme["chip"],
                 fg=theme["text"],
@@ -5899,8 +6171,12 @@ class App(tk.Tk):
             except tk.TclError:
                 pass
         self.settings = load_settings()
+        lang = str(self.settings.get("language") or LANG_RU)
+        set_language(lang if lang in I18N else LANG_RU)
+        self.lang_var = tk.StringVar(value=current_language())
         self.theme_name = self.settings.get("theme") if self.settings.get("theme") in THEMES else "dark"
         self.theme = THEMES[self.theme_name]
+        self.title(_("app_title"))
         self.configure(bg=self.theme["bg"])
         configure_ttk_style(self.theme)
         self.events: queue.Queue = queue.Queue()
@@ -5985,13 +6261,21 @@ class App(tk.Tk):
         )
         self.brand_sub.pack(side="left", padx=(6, 0))
 
-        self.settings_btn = make_nav_chip(brand_row, "Настройки", t, self.open_settings)
+        self.settings_btn = make_nav_chip(brand_row, _("settings"), t, self.open_settings)
         self.settings_btn.pack(side="right")
-        self.clear_btn = make_nav_chip(brand_row, "Очистить", t, self.clear_all_downloads)
+        self.theme_btn = make_nav_chip(
+            brand_row,
+            _("theme_icon_to_light") if self.theme_name == "dark" else _("theme_icon_to_dark"),
+            t,
+            self.toggle_theme,
+        )
+        self.theme_btn.configure(font=(UI_FONT, 14))
+        self.theme_btn.pack(side="right", padx=(0, 4))
+        self.clear_btn = make_nav_chip(brand_row, _("clear"), t, self.clear_all_downloads)
         self.clear_btn.pack(side="right", padx=(0, 4))
-        self.history_btn = make_nav_chip(brand_row, "История", t, self.open_history)
+        self.history_btn = make_nav_chip(brand_row, _("history"), t, self.open_history)
         self.history_btn.pack(side="right", padx=(0, 4))
-        self.proxy_chip = make_nav_chip(brand_row, "Прокси: выкл", t, self.open_settings)
+        self.proxy_chip = make_nav_chip(brand_row, _("proxy_off"), t, self.open_settings)
         self.proxy_chip.pack(side="right", padx=(0, 4))
 
         # Composer band
@@ -6014,7 +6298,7 @@ class App(tk.Tk):
         shell_inner.bind("<Button-1>", lambda _e: self.url_entry.focus_set())
 
         self.url_var = tk.StringVar()
-        self._url_placeholder = "Вставьте ссылку на видео…  Ctrl+V"
+        self._url_placeholder = _("url_placeholder")
         self.url_entry = tk.Entry(
             shell_inner,
             textvariable=self.url_var,
@@ -6033,9 +6317,9 @@ class App(tk.Tk):
         self.url_entry.bind("<Return>", lambda _e: self.start_download())
         self._bind_clipboard_shortcuts()
         self._menu = tk.Menu(self, tearoff=0)
-        self._menu.add_command(label="Вставить", command=self.paste_url)
-        self._menu.add_command(label="Копировать", command=self._copy_url)
-        self._menu.add_command(label="Вырезать", command=self._cut_url)
+        self._menu.add_command(label=_("paste"), command=self.paste_url)
+        self._menu.add_command(label=_("copy"), command=self._copy_url)
+        self._menu.add_command(label=_("cut"), command=self._cut_url)
         self.url_entry.bind("<Button-3>", lambda e: self._menu.tk_popup(e.x_root, e.y_root))
         self.after(50, self.url_entry.focus_set)
         self.after(200, self._maybe_autofill_clipboard)
@@ -6043,7 +6327,7 @@ class App(tk.Tk):
 
         self.add_btn = tk.Button(
             shell_inner,
-            text="Добавить",
+            text=_("add"),
             command=self.start_download,
             bg=t["accent"],
             fg=t["accent_text"],
@@ -6060,7 +6344,7 @@ class App(tk.Tk):
 
         self.stop_btn = tk.Button(
             shell_inner,
-            text="Стоп",
+            text=_("stop"),
             command=self.stop_download,
             bg=t["chip"],
             fg=t["muted"],
@@ -6147,7 +6431,7 @@ class App(tk.Tk):
         self.empty_icon.place(relx=0.5, rely=0.5, anchor="center")
         self.empty_label = tk.Label(
             self.empty_wrap,
-            text="Очередь пуста",
+            text=_("empty_title"),
             bg=t["bg"],
             fg=t["text"],
             font=(UI_FONT_SEMI, 16),
@@ -6156,7 +6440,7 @@ class App(tk.Tk):
         self.empty_label.pack()
         self.empty_hint = tk.Label(
             self.empty_wrap,
-            text="YouTube · VK · Rutube · Chaturbate · HLS\nВставьте ссылку сверху и нажмите Добавить",
+            text=_("empty_hint"),
             bg=t["bg"],
             fg=t["muted"],
             font=(UI_FONT, 10),
@@ -6171,7 +6455,7 @@ class App(tk.Tk):
         foot_inner = tk.Frame(self.footer, bg=t["header"])
         foot_inner.pack(fill="x", padx=28, pady=10)
         foot_inner.app_theme_owner = self  # type: ignore[attr-defined]
-        self.status_var = tk.StringVar(value="Готово")
+        self.status_var = tk.StringVar(value=_("ready"))
         self.status = tk.Label(
             foot_inner,
             textvariable=self.status_var,
@@ -6181,13 +6465,13 @@ class App(tk.Tk):
             anchor="w",
         )
         self.status.pack(side="left", fill="x", expand=True)
-        self.theme_btn = make_nav_chip(
+        self.lang_chip = make_nav_chip(
             foot_inner,
-            "Светлая тема" if self.theme_name == "dark" else "Тёмная тема",
+            LANG_NAMES.get(current_language(), "Русский"),
             t,
-            self.toggle_theme,
+            self.open_settings,
         )
-        self.theme_btn.pack(side="right")
+        self.lang_chip.pack(side="right")
 
         # Compat aliases
         self.download_btn = self.add_btn
@@ -6270,12 +6554,23 @@ class App(tk.Tk):
             activebackground=t["danger"] if busy else t["chip_hover"],
             activeforeground="#ffffff" if busy else t["text"],
         )
-        for btn in (self.settings_btn, self.history_btn, getattr(self, "clear_btn", None), self.theme_btn):
+        for btn in (
+            self.settings_btn,
+            self.history_btn,
+            getattr(self, "clear_btn", None),
+            self.theme_btn,
+            getattr(self, "lang_chip", None),
+        ):
             if btn is None:
                 continue
             btn.configure(bg=t["header"], fg=t["muted"])
         self.status.configure(bg=t["header"], fg=t["muted"])
-        self.theme_btn.configure(text="Светлая тема" if self.theme_name == "dark" else "Тёмная тема")
+        self.theme_btn.configure(
+            text=_("theme_icon_to_light") if self.theme_name == "dark" else _("theme_icon_to_dark"),
+            font=(UI_FONT, 14),
+        )
+        if hasattr(self, "lang_chip"):
+            self.lang_chip.configure(text=LANG_NAMES.get(current_language(), "Русский"))
         self.empty_wrap.configure(bg=t["bg"])
         if hasattr(self, "empty_badge"):
             self.empty_badge.configure(bg=t["surface"], highlightbackground=t["border"])
@@ -6361,7 +6656,7 @@ class App(tk.Tk):
             self.url_entry.configure(fg=self.theme["text"])
         self.url_var.set(text.splitlines()[0].strip() if "\n" not in text else text)
         self._maybe_suggest_name()
-        self.status_var.set("Ссылка из буфера")
+        self.status_var.set(_("clipboard_link"))
 
     def show_toast(self, title: str, message: str, *, ok: bool = True) -> None:
         if not bool(self.notify_var.get()):
@@ -6414,7 +6709,7 @@ class App(tk.Tk):
         card.download_btn.configure(text="Скачать", command=card._start_download, state="disabled")
         card._show_fetching()
         card.meta_var.set("Получение метаданных…")
-        self.status_var.set(f"Повторный парсинг… {card.url[:60]}")
+        self.status_var.set(_("reparsing", url=card.url[:60]))
         self._start_probe(index, card.url)
 
     def _resolved_proxy(self) -> str:
@@ -6448,6 +6743,50 @@ class App(tk.Tk):
     def _cookies_path(self) -> str:
         return self.cookies_var.get().strip()
 
+    def set_language(self, lang: str) -> None:
+        if lang not in I18N:
+            return
+        set_language(lang)
+        self.lang_var.set(lang)
+        self.apply_language()
+        self._persist()
+
+    def apply_language(self) -> None:
+        self.title(_("app_title"))
+        was_placeholder = self._url_is_placeholder()
+        self._url_placeholder = _("url_placeholder")
+        if was_placeholder or not self.url_var.get().strip():
+            self.url_entry.delete(0, "end")
+            self.url_entry.insert(0, self._url_placeholder)
+            self.url_entry.configure(fg=self.theme["muted"])
+        self.settings_btn.configure(text=_("settings"))
+        self.clear_btn.configure(text=_("clear"))
+        self.history_btn.configure(text=_("history"))
+        self.add_btn.configure(text=_("add"))
+        self.stop_btn.configure(text=_("stop"))
+        self.empty_label.configure(text=_("empty_title"))
+        self.empty_hint.configure(text=_("empty_hint"))
+        self.theme_btn.configure(
+            text=_("theme_icon_to_light") if self.theme_name == "dark" else _("theme_icon_to_dark"),
+            font=(UI_FONT, 14),
+        )
+        if hasattr(self, "lang_chip"):
+            self.lang_chip.configure(text=LANG_NAMES.get(current_language(), "Русский"))
+        try:
+            self._menu.entryconfigure(0, label=_("paste"))
+            self._menu.entryconfigure(1, label=_("copy"))
+            self._menu.entryconfigure(2, label=_("cut"))
+        except tk.TclError:
+            pass
+        self._refresh_proxy_chip()
+        if self.status_var.get() in {"Готово", "Ready", "Очередь", "Queue"}:
+            self.status_var.set(_("ready"))
+        for card in self._cards:
+            try:
+                card.apply_language()
+            except Exception:
+                pass
+
     def _refresh_proxy_chip(self) -> None:
         if not hasattr(self, "proxy_chip"):
             return
@@ -6458,12 +6797,12 @@ class App(tk.Tk):
             proxy = self.proxy_var.get().strip()
         if proxy:
             self.proxy_chip.configure(
-                text=f"Прокси · {proxy_display(proxy)}",
+                text=_("proxy_on", proxy=proxy_display(proxy)),
                 bg=t["accent_dim"],
                 fg=t["accent"],
             )
         else:
-            self.proxy_chip.configure(text="Прокси: выкл", bg=t["header"], fg=t["muted"])
+            self.proxy_chip.configure(text=_("proxy_off"), bg=t["header"], fg=t["muted"])
         if not self.proxy_chip.winfo_ismapped():
             self.proxy_chip.pack(side="right", padx=(0, 4), before=self.history_btn)
 
@@ -6474,7 +6813,7 @@ class App(tk.Tk):
         t = self.theme
         win = tk.Toplevel(self)
         self._settings_win = win
-        win.title("Настройки")
+        win.title(_("settings"))
         win.configure(bg=t["bg"])
         win.resizable(True, True)
         win.minsize(560, 420)
@@ -6491,7 +6830,7 @@ class App(tk.Tk):
         header.pack(side="top", fill="x", padx=22, pady=(16, 0))
         tk.Label(
             header,
-            text="Настройки",
+            text=_("settings"),
             bg=t["bg"],
             fg=t["text"],
             font=(UI_FONT_SEMI, 18),
@@ -6499,7 +6838,7 @@ class App(tk.Tk):
         ).pack(fill="x", pady=(0, 6))
         tk.Label(
             header,
-            text="Внешний вид, прокси, User-Agent и cookies",
+            text=_("settings_sub"),
             bg=t["bg"],
             fg=t["muted"],
             font=(UI_FONT, 9),
@@ -6560,11 +6899,11 @@ class App(tk.Tk):
             )
             return inner
 
-        # Theme + folder
-        general = section("Основные")
+        # Theme + language + folder
+        general = section(_("general"))
         theme_row = tk.Frame(general, bg=t["card"])
         theme_row.pack(fill="x", pady=(0, 10))
-        tk.Label(theme_row, text="Тема", bg=t["card"], fg=t["muted"], font=("Segoe UI", 9), width=12, anchor="w").pack(
+        tk.Label(theme_row, text=_("theme"), bg=t["card"], fg=t["muted"], font=("Segoe UI", 9), width=12, anchor="w").pack(
             side="left"
         )
         theme_var = tk.StringVar(value=self.theme_name)
@@ -6572,26 +6911,51 @@ class App(tk.Tk):
         def on_theme() -> None:
             self.set_theme(theme_var.get())
 
-        ttk.Radiobutton(theme_row, text="Тёмная", value="dark", variable=theme_var, command=on_theme).pack(side="left")
-        ttk.Radiobutton(theme_row, text="Светлая", value="light", variable=theme_var, command=on_theme).pack(
+        ttk.Radiobutton(theme_row, text=_("theme_dark"), value="dark", variable=theme_var, command=on_theme).pack(side="left")
+        ttk.Radiobutton(theme_row, text=_("theme_light"), value="light", variable=theme_var, command=on_theme).pack(
             side="left", padx=(12, 0)
         )
 
+        lang_row = tk.Frame(general, bg=t["card"])
+        lang_row.pack(fill="x", pady=(0, 10))
+        tk.Label(lang_row, text=_("language"), bg=t["card"], fg=t["muted"], font=("Segoe UI", 9), width=12, anchor="w").pack(
+            side="left"
+        )
+        lang_combo = ttk.Combobox(
+            lang_row,
+            state="readonly",
+            values=[LANG_NAMES[LANG_RU], LANG_NAMES[LANG_EN]],
+            width=28,
+            style="Metro.TCombobox",
+        )
+        lang_combo.set(LANG_NAMES.get(current_language(), LANG_NAMES[LANG_RU]))
+        lang_combo.pack(side="left", fill="x", expand=True)
+
+        def on_lang(_event=None) -> None:
+            picked = lang_combo.get()
+            code = LANG_RU if picked == LANG_NAMES[LANG_RU] else LANG_EN
+            self.set_language(code)
+            # Rebuild settings so all labels switch immediately.
+            win.destroy()
+            self.open_settings()
+
+        lang_combo.bind("<<ComboboxSelected>>", on_lang)
+
         folder_row = tk.Frame(general, bg=t["card"])
         folder_row.pack(fill="x", pady=(0, 8))
-        tk.Label(folder_row, text="Папка", bg=t["card"], fg=t["muted"], font=("Segoe UI", 9), width=12, anchor="w").pack(
+        tk.Label(folder_row, text=_("folder"), bg=t["card"], fg=t["muted"], font=("Segoe UI", 9), width=12, anchor="w").pack(
             side="left"
         )
         ttk.Entry(folder_row, textvariable=self.dir_var).pack(side="left", fill="x", expand=True)
-        ttk.Button(folder_row, text="Обзор", command=self.browse_dir).pack(side="left", padx=(8, 0))
+        ttk.Button(folder_row, text=_("browse"), command=self.browse_dir).pack(side="left", padx=(8, 0))
 
         threads_row = tk.Frame(general, bg=t["card"])
         threads_row.pack(fill="x", pady=(0, 8))
-        tk.Label(threads_row, text="Потоки HLS", bg=t["card"], fg=t["muted"], font=("Segoe UI", 9), width=12, anchor="w").pack(
+        tk.Label(threads_row, text=_("threads_hls"), bg=t["card"], fg=t["muted"], font=("Segoe UI", 9), width=12, anchor="w").pack(
             side="left"
         )
         ttk.Spinbox(threads_row, from_=1, to=MAX_THREADS, textvariable=self.threads_var, width=8).pack(side="left")
-        tk.Label(threads_row, text="Секунд (тест)", bg=t["card"], fg=t["muted"], font=("Segoe UI", 9)).pack(
+        tk.Label(threads_row, text=_("seconds_test"), bg=t["card"], fg=t["muted"], font=("Segoe UI", 9)).pack(
             side="left", padx=(16, 6)
         )
         ttk.Entry(threads_row, textvariable=self.limit_var, width=10).pack(side="left")
@@ -6600,7 +6964,7 @@ class App(tk.Tk):
         direct_row.pack(fill="x")
         tk.Label(
             direct_row,
-            text="Потоки MP4",
+            text=_("threads_mp4"),
             bg=t["card"],
             fg=t["muted"],
             font=("Segoe UI", 9),
@@ -6610,7 +6974,7 @@ class App(tk.Tk):
         ttk.Spinbox(direct_row, from_=1, to=MAX_THREADS, textvariable=self.direct_threads_var, width=8).pack(side="left")
         tk.Label(
             general,
-            text="HLS — сегменты/yt-dlp (обычно 16–24). MP4 — параллель для mixdrop/mxcontent (лучше 8–12).",
+            text=_("threads_help"),
             bg=t["card"],
             fg=t["muted"],
             font=(UI_FONT, 8),
@@ -6621,25 +6985,25 @@ class App(tk.Tk):
 
         ttk.Checkbutton(
             general,
-            text="Запоминать размер и положение окна после закрытия",
+            text=_("remember_geometry"),
             variable=self.remember_geometry_var,
         ).pack(anchor="w", pady=(12, 0))
         ttk.Checkbutton(
             general,
-            text="Подставлять ссылку из буфера при фокусе окна",
+            text=_("auto_clipboard"),
             variable=self.auto_clipboard_var,
         ).pack(anchor="w", pady=(8, 0))
         ttk.Checkbutton(
             general,
-            text="Звук и всплывающее уведомление по завершении",
+            text=_("notify"),
             variable=self.notify_var,
         ).pack(anchor="w", pady=(8, 0))
 
         # Proxy section — clear UX
-        proxy_box = section("Прокси · HTTP / HTTPS / SOCKS5")
+        proxy_box = section(_("proxy_section"))
         tk.Label(
             proxy_box,
-            text="Выберите тип, затем вставьте адрес. Логин и пароль — по желанию.",
+            text=_("proxy_help"),
             bg=t["card"],
             fg=t["muted"],
             font=("Segoe UI", 9),
@@ -6732,10 +7096,10 @@ class App(tk.Tk):
             chip.bind("<Button-1>", lambda _e, s=sample: (self.proxy_var.set(s), self.proxy_scheme_var.set(detect_proxy_scheme(s)), paint_schemes()))
 
         # User-Agent + Cookies (OVD-style)
-        ua_box = section("User-Agent")
+        ua_box = section(_("ua_section"))
         tk.Label(
             ua_box,
-            text="Выберите браузер или задайте свой. «Случайный» меняет UA на каждую загрузку.",
+            text=_("ua_help"),
             bg=t["card"],
             fg=t["muted"],
             font=("Segoe UI", 9),
@@ -6746,7 +7110,7 @@ class App(tk.Tk):
 
         preset_row = tk.Frame(ua_box, bg=t["card"])
         preset_row.pack(fill="x", pady=(0, 8))
-        tk.Label(preset_row, text="Пресет", bg=t["card"], fg=t["muted"], font=("Segoe UI", 9), width=12, anchor="w").pack(
+        tk.Label(preset_row, text=_("preset"), bg=t["card"], fg=t["muted"], font=("Segoe UI", 9), width=12, anchor="w").pack(
             side="left"
         )
         ua_combo = ttk.Combobox(
@@ -6766,7 +7130,7 @@ class App(tk.Tk):
             preset = self.ua_preset_var.get()
             if preset == UA_PRESET_RANDOM:
                 self.ua_spoof_var.set(True)
-                self.ua_var.set("(на каждое видео свой User-Agent)")
+                self.ua_var.set(_("random_ua_placeholder"))
                 ua_entry.configure(state="disabled")
                 return
             self.ua_spoof_var.set(False)
@@ -6778,7 +7142,7 @@ class App(tk.Tk):
             elif value == "":
                 self.ua_var.set("")
             elif value == "__random__":
-                self.ua_var.set("(на каждое видео свой User-Agent)")
+                self.ua_var.set(_("random_ua_placeholder"))
                 ua_entry.configure(state="disabled")
                 self.ua_spoof_var.set(True)
             else:
@@ -6796,13 +7160,13 @@ class App(tk.Tk):
         on_ua_preset()
         ttk.Checkbutton(
             ua_box,
-            text="Случайный User-Agent на каждое новое видео (+ повтор при блоке)",
+            text=_("random_ua"),
             variable=self.ua_spoof_var,
             command=on_ua_spoof,
         ).pack(anchor="w")
         tk.Label(
             ua_box,
-            text="Сайты часто режут один UA после серии запросов. Случайный режим крутит UA и TLS-профиль.",
+            text=_("random_ua_help"),
             bg=t["card"],
             fg=t["muted"],
             font=(UI_FONT, 8),
@@ -6811,10 +7175,10 @@ class App(tk.Tk):
             justify="left",
         ).pack(fill="x", pady=(6, 0))
 
-        cookies_box = section("Cookies")
+        cookies_box = section(_("cookies"))
         tk.Label(
             cookies_box,
-            text="Файл cookies.txt (Netscape) — для приватных / age-gate / «Sign in to confirm».",
+            text=_("cookies_help"),
             bg=t["card"],
             fg=t["muted"],
             font=("Segoe UI", 9),
@@ -6829,17 +7193,17 @@ class App(tk.Tk):
         def browse_cookies() -> None:
             path = filedialog.askopenfilename(
                 parent=win,
-                title="Выберите cookies.txt",
-                filetypes=[("Cookies", "*.txt"), ("Все файлы", "*.*")],
+                title=_("cookies"),
+                filetypes=[("Cookies", "*.txt"), ("All files", "*.*")],
             )
             if path:
                 self.cookies_var.set(path)
 
-        ttk.Button(cookies_row, text="Обзор", command=browse_cookies).pack(side="left", padx=(8, 0))
-        ttk.Button(cookies_row, text="Убрать", command=lambda: self.cookies_var.set("")).pack(side="left", padx=(6, 0))
+        ttk.Button(cookies_row, text=_("browse"), command=browse_cookies).pack(side="left", padx=(8, 0))
+        ttk.Button(cookies_row, text=_("remove"), command=lambda: self.cookies_var.set("")).pack(side="left", padx=(6, 0))
 
         # Advanced
-        advanced = section("Дополнительно")
+        advanced = section(_("advanced"))
         for label, var in (("Referer", self.referer_var), ("Имя файла", self.name_var)):
             row = tk.Frame(advanced, bg=t["card"])
             row.pack(fill="x", pady=(0, 8))
@@ -6898,7 +7262,7 @@ class App(tk.Tk):
 
         tk.Button(
             footer,
-            text="Сохранить",
+            text=_("save"),
             command=save_and_close,
             bg=t["accent"],
             fg=t["accent_text"],
@@ -6911,7 +7275,7 @@ class App(tk.Tk):
             cursor="hand2",
             bd=0,
         ).pack(side="right")
-        ttk.Button(footer, text="Отмена", command=win.destroy).pack(side="right", padx=(0, 8))
+        ttk.Button(footer, text=_("cancel"), command=win.destroy).pack(side="right", padx=(0, 8))
         win.protocol("WM_DELETE_WINDOW", win.destroy)
         win.after_idle(_sync_scroll)
 
@@ -7214,7 +7578,7 @@ class App(tk.Tk):
         params = self._snapshot()
         urls = parse_url_list(params["source"])
         if not urls:
-            messagebox.showinfo("Нет ссылки", "Вставьте одну или несколько ссылок.")
+            messagebox.showinfo(_("no_link"), _("no_link_body"))
             return
         self._persist()
         self.empty_wrap.pack_forget()
@@ -7223,12 +7587,12 @@ class App(tk.Tk):
             card = DownloadCard(self.cards_frame, self, index, url)
             card.pack(fill="x", pady=8)
             self._cards.append(card)
-            self._queue_items.append({"url": url, "state": "fetch", "detail": "Получение метаданных…"})
+            self._queue_items.append({"url": url, "state": "fetch", "detail": _("fetching")})
             self._start_probe(index, url)
         self.url_entry.delete(0, "end")
         self.url_entry.insert(0, self._url_placeholder)
         self.url_entry.configure(fg=self.theme["muted"])
-        self.status_var.set(f"В очереди: {len(self._cards)}")
+        self.status_var.set(_("queue_count", n=len(self._cards)))
 
     def _start_probe(self, index: int, url: str) -> None:
         if not (0 <= index < len(self._cards)):
@@ -7676,9 +8040,9 @@ class App(tk.Tk):
                                     "when": datetime.now().isoformat(timespec="seconds"),
                                 }
                             )
-                            self.show_toast("Готово", card.title_var.get()[:80] or detail, ok=True)
+                            self.show_toast(_("toast_done"), card.title_var.get()[:80] or detail, ok=True)
                         else:
-                            err = friendly_download_error(payload.get("error") or "Ошибка скачивания")
+                            err = friendly_download_error(payload.get("error") or _("error_download"))
                             card.apply_error(err)
                             append_download_history(
                                 {
@@ -7689,11 +8053,11 @@ class App(tk.Tk):
                                     "when": datetime.now().isoformat(timespec="seconds"),
                                 }
                             )
-                            self.show_toast("Ошибка", err[:100], ok=False)
+                            self.show_toast(_("toast_error"), err[:100], ok=False)
                     busy = any(c.state == "run" for c in self._cards)
                     self._set_busy(busy)
                     if not busy:
-                        self.status_var.set("Готово" if any(c.state == "ok" for c in self._cards) else "Очередь")
+                        self.status_var.set(_("ready") if any(c.state == "ok" for c in self._cards) else _("queue"))
                 elif kind == "proc":
                     self.proc = payload
                 elif kind == "log":
@@ -7771,6 +8135,7 @@ class App(tk.Tk):
             "threads": clamp_threads(self.threads_var.get()),
             "direct_threads": clamp_threads(self.direct_threads_var.get()),
             "theme": self.theme_name,
+            "language": current_language(),
             "remember_geometry": remember,
             "auto_clipboard": bool(self.auto_clipboard_var.get()),
             "notify": bool(self.notify_var.get()),
@@ -7782,7 +8147,7 @@ class App(tk.Tk):
     def _on_close(self) -> None:
         busy = (self.worker and self.worker.is_alive()) or any(c.state == "run" for c in self._cards)
         if busy:
-            if not messagebox.askyesno("Выход", "Скачивание ещё идёт. Остановить и закрыть?"):
+            if not messagebox.askyesno(_("exit_title"), _("exit_busy")):
                 return
             self.stop_download()
         try:
