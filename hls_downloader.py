@@ -9,6 +9,7 @@ import http.cookiejar
 import json
 import os
 import queue
+import random
 import re
 import shutil
 import ssl
@@ -64,7 +65,41 @@ DEFAULT_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"
 )
+UA_PRESET_RANDOM = "Случайный (каждое видео)"
+UA_PRESET_CUSTOM = "Свой (custom)"
+UA_PRESET_EMPTY = "Пустой (empty)"
+# Broader pool — sites often soft-ban one fingerprint after many requests.
+RANDOM_UA_POOL: tuple[str, ...] = (
+    DEFAULT_UA,
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_6_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:131.0) Gecko/20100101 Firefox/131.0",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:133.0) Gecko/20100101 Firefox/133.0",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:128.0) Gecko/20100101 Firefox/128.0",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 14.6; rv:131.0) Gecko/20100101 Firefox/131.0",
+    "Mozilla/5.0 (X11; Linux x86_64; rv:131.0) Gecko/20100101 Firefox/131.0",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36 Edg/140.0.0.0",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_6) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15",
+    "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.7339.155 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 13; SM-S918B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.6778.135 Mobile Safari/537.36",
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1",
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1",
+)
+_UA_LOCK = threading.Lock()
+_LAST_RANDOM_UA = ""
 USER_AGENT_PRESETS: dict[str, str | None] = {
+    UA_PRESET_RANDOM: "__random__",
     "Chrome (Windows)": DEFAULT_UA,
     "Chrome (macOS)": (
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_6) AppleWebKit/537.36 "
@@ -89,10 +124,9 @@ USER_AGENT_PRESETS: dict[str, str | None] = {
         "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 "
         "(KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1"
     ),
-    "Пустой (empty)": "",
-    "Свой (custom)": None,
+    UA_PRESET_EMPTY: "",
+    UA_PRESET_CUSTOM: None,
 }
-UA_PRESET_CUSTOM = "Свой (custom)"
 DEFAULT_THREADS = 24
 DEFAULT_DIRECT_THREADS = 12
 MAX_THREADS = 64
@@ -388,30 +422,100 @@ def detect_proxy_scheme(raw: str) -> str:
     return "http"
 
 
-def resolve_user_agent(preset: str, custom: str, spoof: bool = False) -> str:
-    """Pick UA from preset / custom / random spoof pool (OVD-style)."""
-    import random
+def random_user_agent(exclude: str = "") -> str:
+    """Pick a UA from the pool, avoiding the last one when possible."""
+    global _LAST_RANDOM_UA
+    pool = [ua for ua in RANDOM_UA_POOL if ua and ua != exclude]
+    if not pool:
+        pool = list(RANDOM_UA_POOL) or [DEFAULT_UA]
+    with _UA_LOCK:
+        choices = [ua for ua in pool if ua != _LAST_RANDOM_UA] or pool
+        picked = random.choice(choices)
+        _LAST_RANDOM_UA = picked
+    return picked
 
-    if spoof:
-        pool = [value for key, value in USER_AGENT_PRESETS.items() if isinstance(value, str) and value]
-        return random.choice(pool) if pool else DEFAULT_UA
+
+def is_random_ua_mode(preset: str, spoof: bool = False) -> bool:
+    return bool(spoof) or preset == UA_PRESET_RANDOM
+
+
+def resolve_user_agent(preset: str, custom: str, spoof: bool = False) -> str:
+    """Pick UA from preset / custom / random pool."""
+    if is_random_ua_mode(preset, spoof):
+        return random_user_agent()
     if preset == UA_PRESET_CUSTOM or preset not in USER_AGENT_PRESETS:
-        text = (custom or "").strip()
-        return text
+        return (custom or "").strip()
     value = USER_AGENT_PRESETS.get(preset)
     if value is None:
         return (custom or "").strip()
+    if value == "__random__":
+        return random_user_agent()
     return value
 
 
 def detect_ua_preset(user_agent: str) -> str:
     text = (user_agent or "").strip()
     for name, value in USER_AGENT_PRESETS.items():
+        if name in {UA_PRESET_RANDOM, UA_PRESET_CUSTOM}:
+            continue
         if isinstance(value, str) and value == text:
             return name
     if not text:
-        return "Пустой (empty)"
+        return UA_PRESET_EMPTY
     return UA_PRESET_CUSTOM
+
+
+def looks_like_ua_block(message: str) -> bool:
+    lower = (message or "").lower()
+    tokens = (
+        "403",
+        "429",
+        "503",
+        "forbidden",
+        "cloudflare",
+        "captcha",
+        "attention required",
+        "access denied",
+        "blocked",
+        "rate limit",
+        "too many requests",
+        "bot",
+        "unable to extract",
+        "не удалось найти видео",
+        "не удалось получить",
+        "http error 4",
+    )
+    return any(token in lower for token in tokens)
+
+
+def curl_impersonate_candidates(ua: str) -> list[str]:
+    lower = (ua or "").lower()
+    if "firefox" in lower:
+        return ["firefox133", "firefox135", "chrome131", "chrome124"]
+    if "edg/" in lower:
+        return ["edge99", "edge101", "chrome131", "chrome124"]
+    if ("iphone" in lower or "ipad" in lower) and "crios" not in lower:
+        return ["safari184", "safari180", "safari17_0", "safari15_5", "chrome131"]
+    if "macintosh" in lower and "chrome" not in lower and "safari" in lower:
+        return ["safari184", "safari180", "safari17_0", "chrome131"]
+    return ["chrome131", "chrome124", "chrome123", "chrome120", "chrome116", "chrome110"]
+
+
+def make_curl_session(ua: str = ""):
+    ensure_curl_cffi()
+    from curl_cffi import requests as crequests
+
+    last_exc: Exception | None = None
+    for name in curl_impersonate_candidates(ua):
+        try:
+            return crequests.Session(impersonate=name)
+        except Exception as exc:  # unsupported impersonate profile
+            last_exc = exc
+            continue
+    try:
+        return crequests.Session(impersonate="chrome131")
+    except Exception as exc:
+        raise PlaylistError(f"curl_cffi Session: {exc or last_exc}") from exc
 
 
 def load_netscape_cookie_header(path: Path) -> str:
@@ -2321,15 +2425,11 @@ def extract_title(text: str) -> str | None:
 
 
 class BrowserClient:
-    """HTTP client that mimics Chrome and bypasses many bot checks."""
+    """HTTP client that mimics a real browser and bypasses many bot checks."""
 
     def __init__(self, headers: dict[str, str] | None = None, proxy: str = "") -> None:
-        ensure_curl_cffi()
-        from curl_cffi import requests as crequests
-
-        self._requests = crequests
-        self.session = crequests.Session(impersonate="chrome131")
         self.headers = dict(headers or {})
+        self.session = make_curl_session(self.headers.get("User-Agent") or DEFAULT_UA)
         try:
             self.proxy = normalize_proxy_url(proxy or current_proxy())
         except PlaylistError:
@@ -4622,10 +4722,7 @@ def cache_thumbnail_image(url: str, headers: dict[str, str] | None = None) -> Pa
     if out.exists() and out.stat().st_size > 0:
         return out
     try:
-        ensure_curl_cffi()
-        from curl_cffi import requests as crequests
-
-        session = crequests.Session(impersonate="chrome131")
+        session = make_curl_session((headers or {}).get("User-Agent") or DEFAULT_UA)
         req_headers = {"User-Agent": (headers or {}).get("User-Agent") or DEFAULT_UA, "Accept": "image/*,*/*"}
         if headers and headers.get("Referer"):
             req_headers["Referer"] = headers["Referer"]
@@ -5206,6 +5303,7 @@ class DownloadCard(tk.Frame):
         self.output = ""
         self.percent: float | None = None
         self.thumbnail_url = ""
+        self.user_agent = ""
         self.qualities: list[dict] = []
         self.audio_tracks: list[dict] = []
         self.selected_audio: list[dict] = []
@@ -5543,6 +5641,8 @@ class DownloadCard(tk.Frame):
     def apply_probe(self, data: dict) -> None:
         self.probe = dict(data)
         self.state = "ready"
+        if data.get("user_agent"):
+            self.user_agent = str(data["user_agent"])
         if data.get("title"):
             self.title_var.set(str(data["title"]))
         if data.get("thumbnail"):
@@ -5565,6 +5665,10 @@ class DownloadCard(tk.Frame):
         self.audio_tracks = list(data.get("audio_tracks") or [])
         self._set_selected_audio(self._default_audio_selection())
         self._show_ready()
+        if self.user_agent and self.app._random_ua_enabled():
+            short = self.user_agent.replace("Mozilla/5.0 ", "")[:48]
+            base = self.meta_var.get()
+            self.meta_var.set(f"{base} · UA: {short}…")
 
     def apply_error(self, message: str) -> None:
         self.state = "err"
@@ -5893,10 +5997,14 @@ class App(tk.Tk):
         self.name_var.trace_add("write", self._on_name_write)
         self.ua_var = tk.StringVar(value=self.settings.get("user_agent") or DEFAULT_UA)
         saved_preset = str(self.settings.get("ua_preset") or "")
-        if saved_preset not in USER_AGENT_PRESETS:
+        if bool(self.settings.get("ua_spoof")) or saved_preset == UA_PRESET_RANDOM:
+            saved_preset = UA_PRESET_RANDOM
+        elif saved_preset not in USER_AGENT_PRESETS:
             saved_preset = detect_ua_preset(self.ua_var.get())
         self.ua_preset_var = tk.StringVar(value=saved_preset)
-        self.ua_spoof_var = tk.BooleanVar(value=bool(self.settings.get("ua_spoof")))
+        self.ua_spoof_var = tk.BooleanVar(
+            value=bool(self.settings.get("ua_spoof")) or saved_preset == UA_PRESET_RANDOM
+        )
         self.cookies_var = tk.StringVar(value=self.settings.get("cookies") or "")
         self.referer_var = tk.StringVar(value=self.settings.get("referer") or "")
         saved_proxy = self.settings.get("proxy") or ""
@@ -6217,6 +6325,7 @@ class App(tk.Tk):
             return
         card.state = "fetch"
         card.probe = {}
+        card.user_agent = ""
         card.percent = None
         card.download_btn.configure(text="Скачать", command=card._start_download, state="disabled")
         card._show_fetching()
@@ -6228,12 +6337,27 @@ class App(tk.Tk):
             return ""
         return normalize_proxy_url(raw, self.proxy_scheme_var.get())
 
+    def _random_ua_enabled(self) -> bool:
+        return is_random_ua_mode(self.ua_preset_var.get(), bool(self.ua_spoof_var.get()))
+
     def _effective_ua(self) -> str:
         return resolve_user_agent(
             self.ua_preset_var.get(),
             self.ua_var.get(),
             bool(self.ua_spoof_var.get()),
         )
+
+    def _ua_for_card(self, card: "DownloadCard | None" = None, *, rotate: bool = False) -> str:
+        """Stable UA per card; rotate when random mode requests a new one."""
+        if card is not None and card.user_agent and not rotate:
+            return card.user_agent
+        if self._random_ua_enabled():
+            ua = random_user_agent(exclude=(card.user_agent if card else ""))
+        else:
+            ua = self._effective_ua() or DEFAULT_UA
+        if card is not None:
+            card.user_agent = ua
+        return ua or DEFAULT_UA
 
     def _cookies_path(self) -> str:
         return self.cookies_var.get().strip()
@@ -6554,26 +6678,52 @@ class App(tk.Tk):
 
         def on_ua_preset(_event=None) -> None:
             preset = self.ua_preset_var.get()
+            if preset == UA_PRESET_RANDOM:
+                self.ua_spoof_var.set(True)
+                self.ua_var.set("(на каждое видео свой User-Agent)")
+                ua_entry.configure(state="disabled")
+                return
+            self.ua_spoof_var.set(False)
             value = USER_AGENT_PRESETS.get(preset)
+            ua_entry.configure(state="normal")
             if value is None:
-                ua_entry.configure(state="normal")
-                if not self.ua_var.get().strip() or detect_ua_preset(self.ua_var.get()) != UA_PRESET_CUSTOM:
-                    # keep current custom text if already custom
-                    pass
+                if not self.ua_var.get().strip() or self.ua_var.get().startswith("("):
+                    self.ua_var.set("")
             elif value == "":
                 self.ua_var.set("")
-                ua_entry.configure(state="normal")
+            elif value == "__random__":
+                self.ua_var.set("(на каждое видео свой User-Agent)")
+                ua_entry.configure(state="disabled")
+                self.ua_spoof_var.set(True)
             else:
                 self.ua_var.set(value)
-                ua_entry.configure(state="normal")
+
+        def on_ua_spoof() -> None:
+            if self.ua_spoof_var.get():
+                self.ua_preset_var.set(UA_PRESET_RANDOM)
+                on_ua_preset()
+            elif self.ua_preset_var.get() == UA_PRESET_RANDOM:
+                self.ua_preset_var.set("Chrome (Windows)")
+                on_ua_preset()
 
         ua_combo.bind("<<ComboboxSelected>>", on_ua_preset)
         on_ua_preset()
         ttk.Checkbutton(
             ua_box,
-            text="Случайный User-Agent на каждую загрузку (как Spoof в OVD)",
+            text="Случайный User-Agent на каждое новое видео (+ повтор при блоке)",
             variable=self.ua_spoof_var,
+            command=on_ua_spoof,
         ).pack(anchor="w")
+        tk.Label(
+            ua_box,
+            text="Сайты часто режут один UA после серии запросов. Случайный режим крутит UA и TLS-профиль.",
+            bg=t["card"],
+            fg=t["muted"],
+            font=(UI_FONT, 8),
+            anchor="w",
+            wraplength=540,
+            justify="left",
+        ).pack(fill="x", pady=(6, 0))
 
         cookies_box = section("Cookies")
         tk.Label(
@@ -6683,7 +6833,11 @@ class App(tk.Tk):
         if not url or url in self._thumb_jobs:
             return
         self._thumb_jobs.add(url)
-        headers = {"User-Agent": self._effective_ua() or DEFAULT_UA, "Referer": self.referer_var.get() or url}
+        card = self._cards[index] if 0 <= index < len(self._cards) else None
+        headers = {
+            "User-Agent": (card.user_agent if card and card.user_agent else self._effective_ua()) or DEFAULT_UA,
+            "Referer": self.referer_var.get() or (card.url if card else url) or url,
+        }
         try:
             cookies = self._cookies_path()
             if cookies:
@@ -6991,30 +7145,53 @@ class App(tk.Tk):
         self.status_var.set(f"В очереди: {len(self._cards)}")
 
     def _start_probe(self, index: int, url: str) -> None:
-        headers = {
-            "User-Agent": self._effective_ua() or DEFAULT_UA,
-            "Referer": self.referer_var.get() or url,
-        }
+        if not (0 <= index < len(self._cards)):
+            return
+        card = self._cards[index]
         try:
             proxy = self._resolved_proxy()
         except PlaylistError as exc:
             self.events.put(("queue_meta_error", {"index": index, "error": f"Прокси: {exc}"}))
             return
         cookies = self._cookies_path()
-        try:
-            if cookies:
-                headers = apply_cookies_file(headers, cookies)
-        except PlaylistError as exc:
-            self.events.put(("queue_meta_error", {"index": index, "error": str(exc)}))
-            return
+        random_mode = self._random_ua_enabled()
+        max_attempts = 3 if random_mode else 1
+        ua = self._ua_for_card(card, rotate=False)
 
         def work() -> None:
-            try:
-                with use_download_proxy(proxy, cookies):
-                    info = probe_media_info(url, headers, bool(self.insecure_var.get()), None)
-                self.events.put(("queue_meta", {"index": index, **info}))
-            except Exception as exc:
-                self.events.put(("queue_meta_error", {"index": index, "error": str(exc)}))
+            nonlocal ua
+            last_error = "Ошибка"
+            for attempt in range(max_attempts):
+                headers = {
+                    "User-Agent": ua or DEFAULT_UA,
+                    "Referer": self.referer_var.get() or url,
+                }
+                try:
+                    if cookies:
+                        headers = apply_cookies_file(headers, cookies)
+                except PlaylistError as exc:
+                    self.events.put(("queue_meta_error", {"index": index, "error": str(exc)}))
+                    return
+                try:
+                    with use_download_proxy(proxy, cookies):
+                        info = probe_media_info(url, headers, bool(self.insecure_var.get()), None)
+                    info["user_agent"] = ua
+                    self.events.put(("queue_meta", {"index": index, **info}))
+                    return
+                except Exception as exc:
+                    last_error = str(exc)
+                    if attempt + 1 < max_attempts and random_mode:
+                        ua = random_user_agent(exclude=ua)
+                        card.user_agent = ua
+                        self.events.put(
+                            (
+                                "log",
+                                f"Парсинг не удался (попытка {attempt + 1}/{max_attempts}), новый UA…",
+                            )
+                        )
+                        continue
+                    break
+            self.events.put(("queue_meta_error", {"index": index, "error": friendly_download_error(last_error)}))
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -7222,6 +7399,8 @@ class App(tk.Tk):
         quality = card.selected_quality()
         params = self._snapshot()
         params["source"] = card.url
+        # Keep the same UA that successfully probed this card (especially in random mode).
+        params["user_agent"] = self._ua_for_card(card, rotate=False)
         params["name_edited"] = False
         if card.probe.get("title"):
             params["filename"] = sanitize_filename(str(card.probe["title"])) + ".mp4"
@@ -7490,9 +7669,13 @@ class App(tk.Tk):
         remember = bool(self.remember_geometry_var.get())
         data = {
             "output_dir": self.dir_var.get().strip(),
-            "user_agent": self.ua_var.get().strip(),
+            "user_agent": (
+                DEFAULT_UA
+                if self._random_ua_enabled() or self.ua_var.get().strip().startswith("(")
+                else self.ua_var.get().strip()
+            ),
             "ua_preset": self.ua_preset_var.get(),
-            "ua_spoof": bool(self.ua_spoof_var.get()),
+            "ua_spoof": bool(self.ua_spoof_var.get()) or self.ua_preset_var.get() == UA_PRESET_RANDOM,
             "cookies": self.cookies_var.get().strip(),
             "referer": self.referer_var.get().strip(),
             "proxy": proxy,
