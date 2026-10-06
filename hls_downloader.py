@@ -5418,6 +5418,23 @@ class DownloadCard(tk.Frame):
             anchor="w",
         )
         self.status_overlay.pack(fill="x")
+        self.retry_row = tk.Frame(self.progress_frame, bg=theme["card"])
+        self.retry_btn = tk.Button(
+            self.retry_row,
+            text="Спарсить снова",
+            command=self._retry,
+            bg=theme["accent"],
+            fg=theme["accent_text"],
+            activebackground=theme["accent_hover"],
+            activeforeground=theme["accent_text"],
+            relief="flat",
+            font=(UI_FONT_SEMI, 10),
+            padx=16,
+            pady=6,
+            cursor="hand2",
+            bd=0,
+        )
+        self.retry_btn.pack(side="left", pady=(10, 0))
         self.bar_wrap.bind("<Configure>", self._on_bar_configure)
 
         self.meta_var = tk.StringVar(value="Получение метаданных…")
@@ -5479,18 +5496,49 @@ class DownloadCard(tk.Frame):
 
     def _show_fetching(self) -> None:
         self.configure_frame.pack_forget()
+        self.retry_row.pack_forget()
+        if hasattr(self, "retry_download_btn"):
+            try:
+                self.retry_download_btn.destroy()
+            except tk.TclError:
+                pass
         self.progress_frame.pack_forget()
         self.meta_var.set("Получение метаданных…")
-        self.download_btn.configure(state="disabled")
+        self.download_btn.configure(text="Скачать", state="disabled", command=self._start_download)
         self._set_btn_enabled(self.btn_download, False)
+        self.btn_download.configure(text="↓")
+        self.btn_download._command = self._start_download  # type: ignore[attr-defined]
+        self.thumb_label.configure(cursor="")
+        self.thumb_label.unbind("<Button-1>")
+        self.status_overlay.configure(cursor="")
+        self.status_overlay.unbind("<Button-1>")
 
     def _show_ready(self) -> None:
+        self.retry_row.pack_forget()
+        if hasattr(self, "retry_download_btn"):
+            try:
+                self.retry_download_btn.destroy()
+            except tk.TclError:
+                pass
         self.progress_frame.pack_forget()
         self.configure_frame.pack(fill="x")
         self._refresh_audio_button()
         self._update_audio_meta()
-        self.download_btn.configure(state="normal")
+        self.download_btn.configure(text="Скачать", state="normal", command=self._start_download)
         self._set_btn_enabled(self.btn_download, True)
+        self.btn_download.configure(text="↓")
+        self.btn_download._command = self._start_download  # type: ignore[attr-defined]
+        self.thumb_label.configure(cursor="")
+        self.thumb_label.unbind("<Button-1>")
+        self.status_overlay.configure(cursor="")
+        self.status_overlay.unbind("<Button-1>")
+
+    def _show_progress(self) -> None:
+        self.configure_frame.pack_forget()
+        self.retry_row.pack_forget()
+        self.progress_frame.pack(fill="x")
+        self.download_btn.configure(state="disabled")
+        self._set_btn_enabled(self.btn_download, False)
 
     def _refresh_audio_button(self) -> None:
         self.audio_btn.pack_forget()
@@ -5552,12 +5600,6 @@ class DownloadCard(tk.Frame):
             return list(self.selected_audio)
         return self._default_audio_selection()
 
-    def _show_progress(self) -> None:
-        self.configure_frame.pack_forget()
-        self.progress_frame.pack(fill="x")
-        self.download_btn.configure(state="disabled")
-        self._set_btn_enabled(self.btn_download, False)
-
     def _on_bar_configure(self, event) -> None:
         self._bar_width = max(1, event.width)
         self._paint_progress()
@@ -5599,6 +5641,7 @@ class DownloadCard(tk.Frame):
         self.meta_label.configure(bg=theme["card"], fg=theme["muted"])
         self.status_overlay.configure(bg=theme["card"])
         self.download_btn.configure(bg=theme["accent"], fg=theme["accent_text"], activebackground=theme["accent_hover"])
+        self.retry_btn.configure(bg=theme["accent"], fg=theme["accent_text"], activebackground=theme["accent_hover"])
         self.audio_btn.configure(
             bg=theme["chip"],
             fg=theme["text"],
@@ -5674,27 +5717,67 @@ class DownloadCard(tk.Frame):
         self.state = "err"
         self.detail = friendly_download_error(message)
         self.meta_var.set(self.detail)
-        self.status_overlay.configure(text=self.detail[:80])
+        self.status_overlay.configure(text=self.detail[:120])
         self._show_progress()
         self.percent = 8
         self._paint_progress()
         if self._photo is None:
             self.thumb_label.configure(text="!", fg=self.app.theme["danger"])
-        self.download_btn.configure(text="Повтор", state="normal", command=self._retry)
-        if not self.download_btn.winfo_ismapped():
-            self.configure_frame.pack(fill="x")
-            self.download_btn.pack(side="left")
+        has_probe = bool(
+            self.probe.get("playlist_url")
+            or self.probe.get("ytdlp_url")
+            or self.probe.get("mode")
+            or self.probe.get("qualities")
+        )
+        # Primary: re-parse same URL without pasting again.
+        self.retry_btn.configure(text="Спарсить снова", command=self._reparse, state="normal")
+        self.retry_row.pack(fill="x")
+        if hasattr(self, "retry_download_btn"):
+            try:
+                self.retry_download_btn.destroy()
+            except tk.TclError:
+                pass
+        if has_probe:
+            theme = self.app.theme
+            self.retry_download_btn = tk.Button(
+                self.retry_row,
+                text="Повторить скачивание",
+                command=self._retry_download,
+                bg=theme["chip"],
+                fg=theme["text"],
+                activebackground=theme["chip_hover"],
+                activeforeground=theme["text"],
+                relief="flat",
+                font=(UI_FONT, 9),
+                padx=12,
+                pady=6,
+                cursor="hand2",
+                bd=0,
+            )
+            self.retry_download_btn.pack(side="left", padx=(8, 0), pady=(10, 0))
         self._set_btn_enabled(self.btn_download, True)
         self.btn_download.configure(text="↻")
-        self.btn_download._command = self._retry  # type: ignore[attr-defined]
+        self.btn_download._command = self._reparse  # type: ignore[attr-defined]
+        self.thumb_label.configure(cursor="hand2")
+        self.thumb_label.bind("<Button-1>", lambda _e: self._reparse())
+        self.status_overlay.configure(cursor="hand2")
+        self.status_overlay.bind("<Button-1>", lambda _e: self._reparse())
 
-    def _retry(self) -> None:
+    def _reparse(self) -> None:
+        """Re-fetch metadata for the same URL (no need to paste again)."""
         if self.state == "run":
             return
-        if self.probe:
-            self.app.start_card_download(self.index)
-        else:
-            self.app.reprobe_card(self.index)
+        self.app.reprobe_card(self.index)
+
+    def _retry_download(self) -> None:
+        if self.state == "run":
+            return
+        if self.app._random_ua_enabled():
+            self.user_agent = ""
+        self.app.start_card_download(self.index)
+
+    def _retry(self) -> None:
+        self._reparse()
 
     def selected_quality(self) -> dict:
         index = max(0, self.quality_box.current())
@@ -6327,8 +6410,11 @@ class App(tk.Tk):
         card.probe = {}
         card.user_agent = ""
         card.percent = None
+        card.detail = "Получение метаданных…"
         card.download_btn.configure(text="Скачать", command=card._start_download, state="disabled")
         card._show_fetching()
+        card.meta_var.set("Получение метаданных…")
+        self.status_var.set(f"Повторный парсинг… {card.url[:60]}")
         self._start_probe(index, card.url)
 
     def _resolved_proxy(self) -> str:
