@@ -98,6 +98,18 @@ RANDOM_UA_POOL: tuple[str, ...] = (
 )
 _UA_LOCK = threading.Lock()
 _LAST_RANDOM_UA = ""
+ACCEPT_LANGUAGE_POOL: tuple[str, ...] = (
+    "en-US,en;q=0.9",
+    "en-GB,en;q=0.9",
+    "en-US,en;q=0.9,ru;q=0.8",
+    "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
+    "de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7",
+    "fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7",
+    "es-ES,es;q=0.9,en;q=0.8",
+    "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
+    "uk-UA,uk;q=0.9,ru;q=0.8,en;q=0.7",
+    "pl-PL,pl;q=0.9,en-US;q=0.8,en;q=0.7",
+)
 USER_AGENT_PRESETS: dict[str, str | None] = {
     UA_PRESET_RANDOM: "__random__",
     "Chrome (Windows)": DEFAULT_UA,
@@ -453,6 +465,79 @@ def resolve_user_agent(preset: str, custom: str, spoof: bool = False) -> str:
     return value
 
 
+def _platform_from_ua(ua: str) -> str:
+    lower = (ua or "").lower()
+    if "android" in lower:
+        return '"Android"'
+    if "iphone" in lower or "ipad" in lower:
+        return '"iOS"'
+    if "mac os x" in lower or "macintosh" in lower:
+        return '"macOS"'
+    if "linux" in lower:
+        return '"Linux"'
+    return '"Windows"'
+
+
+def client_hint_headers(ua: str) -> dict[str, str]:
+    """Chrome-like client hints derived from the UA string."""
+    lower = (ua or "").lower()
+    if "firefox" in lower or ("safari" in lower and "chrome" not in lower and "crios" not in lower):
+        return {}
+    match = re.search(r"(?:Chrome|CriOS)/(\d+)", ua)
+    ver = match.group(1) if match else "140"
+    mobile = "?1" if any(token in lower for token in ("mobile", "android", "iphone", "ipad")) else "?0"
+    brand = "Microsoft Edge" if "edg/" in lower else "Google Chrome"
+    return {
+        "Sec-CH-UA": f'"Chromium";v="{ver}", "Not=A?Brand";v="24", "{brand}";v="{ver}"',
+        "Sec-CH-UA-Mobile": mobile,
+        "Sec-CH-UA-Platform": _platform_from_ua(ua),
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+        "Sec-Fetch-User": "?1",
+    }
+
+
+def make_browser_fingerprint(
+    *,
+    preferred_ua: str = "",
+    force_random_ua: bool = False,
+    exclude_ua: str = "",
+) -> dict[str, object]:
+    """Unique browser fingerprint for one video (UA + language + client hints)."""
+    if force_random_ua or not preferred_ua.strip():
+        ua = random_user_agent(exclude=exclude_ua)
+    else:
+        ua = preferred_ua.strip()
+    accept_language = random.choice(ACCEPT_LANGUAGE_POOL)
+    extra = client_hint_headers(ua)
+    return {
+        "user_agent": ua,
+        "accept_language": accept_language,
+        "extra_headers": extra,
+    }
+
+
+def fingerprint_headers(fp: dict[str, object] | None, referer: str = "") -> dict[str, str]:
+    """HTTP headers from a stored fingerprint."""
+    fp = fp or {}
+    ua = str(fp.get("user_agent") or DEFAULT_UA)
+    headers = {
+        "User-Agent": ua,
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": str(fp.get("accept_language") or "en-US,en;q=0.9"),
+        "Upgrade-Insecure-Requests": "1",
+    }
+    if referer.strip():
+        headers["Referer"] = referer.strip()
+    extra = fp.get("extra_headers")
+    if isinstance(extra, dict):
+        for key, value in extra.items():
+            if value:
+                headers[str(key)] = str(value)
+    return headers
+
+
 def detect_ua_preset(user_agent: str) -> str:
     text = (user_agent or "").strip()
     for name, value in USER_AGENT_PRESETS.items():
@@ -570,6 +655,27 @@ def append_ytdlp_cookies(command: list[str], cookies_file: str = "") -> list[str
     """Insert --cookies before the URL (last argument)."""
     path = cookies_file or str(getattr(_DOWNLOAD_CTX, "cookies", "") or "")
     args = ytdlp_cookies_args(path)
+    if not args or not command:
+        return command
+    return command[:-1] + args + [command[-1]]
+
+
+def ytdlp_header_args(headers: dict[str, str] | None) -> list[str]:
+    """Extra --add-header flags (skips UA/Referer/Cookie handled separately)."""
+    if not headers:
+        return []
+    skip = {"user-agent", "referer", "cookie", "cookies"}
+    args: list[str] = []
+    for key, value in headers.items():
+        if not value or key.lower() in skip:
+            continue
+        # yt-dlp expects "Name: value"
+        args.extend(["--add-header", f"{key}: {value}"])
+    return args
+
+
+def append_ytdlp_headers(command: list[str], headers: dict[str, str] | None) -> list[str]:
+    args = ytdlp_header_args(headers)
     if not args or not command:
         return command
     return command[:-1] + args + [command[-1]]
@@ -723,14 +829,28 @@ def parse_playlist(text: str, base_url: str) -> Playlist:
     )
 
 
-def build_headers(user_agent: str, referer: str, extra: str, cookies_file: str = "") -> dict[str, str]:
-    headers = {
-        "User-Agent": (user_agent or DEFAULT_UA).strip() or DEFAULT_UA,
-        "Accept": "*/*",
-    }
-    if referer.strip():
-        headers["Referer"] = referer.strip()
-    for line in extra.splitlines():
+def build_headers(
+    user_agent: str,
+    referer: str,
+    extra: str,
+    cookies_file: str = "",
+    fingerprint: dict[str, object] | None = None,
+) -> dict[str, str]:
+    if fingerprint:
+        headers = fingerprint_headers(fingerprint, referer)
+        headers["Accept"] = "*/*"
+    else:
+        headers = {
+            "User-Agent": (user_agent or DEFAULT_UA).strip() or DEFAULT_UA,
+            "Accept": "*/*",
+        }
+        if referer.strip():
+            headers["Referer"] = referer.strip()
+    if user_agent.strip() and not fingerprint:
+        headers["User-Agent"] = user_agent.strip()
+    elif user_agent.strip() and fingerprint and not str(fingerprint.get("user_agent") or "").strip():
+        headers["User-Agent"] = user_agent.strip()
+    for line in (extra or "").splitlines():
         if ":" not in line:
             continue
         key, value = line.split(":", 1)
@@ -1259,6 +1379,7 @@ def ytdlp_get_stream_urls(
     if proxy.strip():
         command += ["--proxy", proxy.strip()]
     command += ytdlp_cookies_args(cookies_file)
+    command += ytdlp_header_args(headers)
     command.append(page_url)
     process = subprocess.run(
         command,
@@ -2265,6 +2386,7 @@ def probe_ytdlp_playlist(url: str, events: queue.Queue | None = None) -> dict | 
     ytdlp = ensure_yt_dlp(events)
     command = [
         str(ytdlp),
+        "--yes-playlist",
         "--flat-playlist",
         "--no-warnings",
         "-J",
@@ -2300,14 +2422,14 @@ def probe_ytdlp_playlist(url: str, events: queue.Queue | None = None) -> dict | 
         return None
     return {
         "url": url,
-        "title": info.get("title") or "Плейлист YouTube",
+        "title": info.get("title") or _("playlist"),
         "thumbnail": pick_ytdlp_thumbnail(info),
         "referer": url,
         "playlist_url": f"ytdlp:{url}",
         "browser": False,
         "mode": "ytdlp_playlist",
         "entries": entries,
-        "qualities": [{"label": "Максимальное (лучшее)", "ytdlp_format": "bv*+ba/b", "choice_url": None}],
+        "qualities": [{"label": _("best_quality"), "ytdlp_format": "bv*+ba/b", "choice_url": None}],
     }
 
 
@@ -2989,7 +3111,7 @@ def resolve_page_to_playlist(
     if events is not None:
         events.put(("status", "Ищу видео через yt-dlp…"))
         events.put(("log", "Пробую yt-dlp"))
-        command = [
+    command = [
         str(ytdlp),
         "--no-playlist",
         "--no-warnings",
@@ -3002,6 +3124,9 @@ def resolve_page_to_playlist(
         page_url,
         page_url,
     ]
+    if headers.get("User-Agent"):
+        command += ["--user-agent", headers["User-Agent"]]
+    command = append_ytdlp_headers(command, headers)
     command = append_ytdlp_cookies(command)
     try:
         process = subprocess.run(
@@ -3728,6 +3853,7 @@ def download_with_ytdlp(
             command += ["--user-agent", headers["User-Agent"]]
         if headers.get("Referer"):
             command += ["--referer", headers["Referer"]]
+        command += ytdlp_header_args(headers)
         cookies_file = str(getattr(_DOWNLOAD_CTX, "cookies", "") or "")
         command += ytdlp_cookies_args(cookies_file)
         if proxy_norm:
@@ -4372,6 +4498,7 @@ def _download_job_inner(
             params["referer"],
             params["extra"],
             cookies_file=str(params.get("cookies") or ""),
+            fingerprint=params.get("fingerprint") if isinstance(params.get("fingerprint"), dict) else None,
         )
         page_info: PageResolve | None = None
         use_cached = (
@@ -4923,6 +5050,11 @@ I18N: dict[str, dict[str, str]] = {
         "playlist_add": "Добавить выбранные",
         "playlist_meta": "Плейлист: {n} видео — выберите что скачать",
         "playlist_empty": "В плейлисте нет видео",
+        "playlist_select_all": "Выбрать все",
+        "playlist_clear_all": "Снять все",
+        "playlist_current_only": "Только текущее",
+        "playlist_added": "Добавлено из плейлиста: {n}",
+        "playlist_title": "Плейлист · {title}",
         "err_deleted_eporner_copy": "Видео удалено с eporner (запрос правообладателя).",
         "err_deleted_eporner": "Видео удалено с eporner.",
         "err_hash": "Не удалось разобрать страницу (видео удалено или недоступно).",
@@ -5034,6 +5166,11 @@ I18N: dict[str, dict[str, str]] = {
         "playlist_add": "Add selected",
         "playlist_meta": "Playlist: {n} videos — pick what to download",
         "playlist_empty": "No videos in playlist",
+        "playlist_select_all": "Select all",
+        "playlist_clear_all": "Clear all",
+        "playlist_current_only": "Current only",
+        "playlist_added": "Added from playlist: {n}",
+        "playlist_title": "Playlist · {title}",
         "err_deleted_eporner_copy": "Video deleted on eporner (copyright request).",
         "err_deleted_eporner": "Video deleted on eporner.",
         "err_hash": "Could not parse the page (video deleted or unavailable).",
@@ -5423,8 +5560,8 @@ class PlaylistPickerDialog(tk.Toplevel):
         self.playlist = playlist
         self.result: list[dict] | None = None
         theme = master.theme
-        title = str(playlist.get("title") or "Плейлист YouTube")
-        self.title(f"Плейлист · {title[:80]}")
+        title = str(playlist.get("title") or _("playlist"))
+        self.title(_("playlist_title", title=title[:80]))
         self.configure(bg=theme["bg"])
         self.transient(master)
         self.grab_set()
@@ -5450,9 +5587,12 @@ class PlaylistPickerDialog(tk.Toplevel):
 
         toolbar = tk.Frame(self, bg=theme["bg"])
         toolbar.pack(fill="x", padx=16, pady=(0, 8))
-        ttk.Button(toolbar, text="Выбрать все", command=self._select_all).pack(side="left")
-        ttk.Button(toolbar, text="Снять все", command=self._clear_all).pack(side="left", padx=(6, 0))
-        ttk.Button(toolbar, text="Только текущее", command=self._select_current).pack(side="left", padx=(6, 0))
+        ttk.Button(toolbar, text=_("playlist_select_all"), command=self._select_all).pack(side="left")
+        ttk.Button(toolbar, text=_("playlist_clear_all"), command=self._clear_all).pack(side="left", padx=(6, 0))
+        if playlist.get("current_id"):
+            ttk.Button(toolbar, text=_("playlist_current_only"), command=self._select_current).pack(
+                side="left", padx=(6, 0)
+            )
 
         list_wrap = tk.Frame(self, bg=theme["bg"])
         list_wrap.pack(fill="both", expand=True, padx=16, pady=(0, 8))
@@ -5468,9 +5608,9 @@ class PlaylistPickerDialog(tk.Toplevel):
 
         self.vars: list[tk.BooleanVar] = []
         self.entries: list[dict] = list(playlist.get("entries") or [])
-        current_id = playlist.get("current_id")
         for entry in self.entries:
-            var = tk.BooleanVar(value=True if not current_id else entry.get("id") == current_id)
+            # Default: all selected — user can clear or pick individually.
+            var = tk.BooleanVar(value=True)
             self.vars.append(var)
             row = tk.Frame(self.rows_frame, bg=theme["input"])
             row.pack(fill="x", padx=8, pady=3)
@@ -5554,6 +5694,7 @@ class DownloadCard(tk.Frame):
         self.percent: float | None = None
         self.thumbnail_url = ""
         self.user_agent = ""
+        self.fingerprint: dict[str, object] | None = None
         self.qualities: list[dict] = []
         self.audio_tracks: list[dict] = []
         self.selected_audio: list[dict] = []
@@ -5956,7 +6097,10 @@ class DownloadCard(tk.Frame):
     def apply_probe(self, data: dict) -> None:
         self.probe = dict(data)
         self.state = "ready"
-        if data.get("user_agent"):
+        if isinstance(data.get("fingerprint"), dict):
+            self.fingerprint = dict(data["fingerprint"])
+            self.user_agent = str(self.fingerprint.get("user_agent") or self.user_agent or "")
+        elif data.get("user_agent"):
             self.user_agent = str(data["user_agent"])
         if data.get("title"):
             self.title_var.set(str(data["title"]))
@@ -5980,10 +6124,16 @@ class DownloadCard(tk.Frame):
         self.audio_tracks = list(data.get("audio_tracks") or [])
         self._set_selected_audio(self._default_audio_selection())
         self._show_ready()
-        if self.user_agent and self.app._random_ua_enabled():
-            short = self.user_agent.replace("Mozilla/5.0 ", "")[:48]
+        if self.user_agent:
+            short = self.user_agent.replace("Mozilla/5.0 ", "")[:40]
+            lang = ""
+            if self.fingerprint:
+                lang = str(self.fingerprint.get("accept_language") or "").split(",")[0]
             base = self.meta_var.get()
-            self.meta_var.set(f"{base} · UA: {short}…")
+            fp_bits = [f"UA: {short}…"]
+            if lang:
+                fp_bits.append(lang)
+            self.meta_var.set(f"{base} · " + " · ".join(fp_bits))
 
     def apply_error(self, message: str) -> None:
         self.state = "err"
@@ -6044,8 +6194,9 @@ class DownloadCard(tk.Frame):
     def _retry_download(self) -> None:
         if self.state == "run":
             return
-        if self.app._random_ua_enabled():
-            self.user_agent = ""
+        # Fresh fingerprint per retry attempt.
+        self.user_agent = ""
+        self.fingerprint = None
         self.app.start_card_download(self.index)
 
     def _retry(self) -> None:
@@ -6704,6 +6855,7 @@ class App(tk.Tk):
         card.state = "fetch"
         card.probe = {}
         card.user_agent = ""
+        card.fingerprint = None
         card.percent = None
         card.detail = "Получение метаданных…"
         card.download_btn.configure(text="Скачать", command=card._start_download, state="disabled")
@@ -6728,17 +6880,34 @@ class App(tk.Tk):
             bool(self.ua_spoof_var.get()),
         )
 
-    def _ua_for_card(self, card: "DownloadCard | None" = None, *, rotate: bool = False) -> str:
-        """Stable UA per card; rotate when random mode requests a new one."""
-        if card is not None and card.user_agent and not rotate:
-            return card.user_agent
-        if self._random_ua_enabled():
-            ua = random_user_agent(exclude=(card.user_agent if card else ""))
-        else:
-            ua = self._effective_ua() or DEFAULT_UA
+    def _fingerprint_for_card(
+        self, card: "DownloadCard | None" = None, *, rotate: bool = False
+    ) -> dict[str, object]:
+        """Stable unique fingerprint per video card; rotate on soft-ban / retry."""
+        if card is not None and card.fingerprint and not rotate:
+            return card.fingerprint
+        force_random = self._random_ua_enabled() or rotate
+        preferred = "" if force_random else (self._effective_ua() or DEFAULT_UA)
+        exclude = ""
         if card is not None:
-            card.user_agent = ua
-        return ua or DEFAULT_UA
+            if card.fingerprint:
+                exclude = str(card.fingerprint.get("user_agent") or "")
+            elif card.user_agent:
+                exclude = card.user_agent
+        fp = make_browser_fingerprint(
+            preferred_ua=preferred,
+            force_random_ua=force_random or not preferred.strip(),
+            exclude_ua=exclude,
+        )
+        if card is not None:
+            card.fingerprint = fp
+            card.user_agent = str(fp.get("user_agent") or DEFAULT_UA)
+        return fp
+
+    def _ua_for_card(self, card: "DownloadCard | None" = None, *, rotate: bool = False) -> str:
+        """Stable UA per card (from its fingerprint)."""
+        fp = self._fingerprint_for_card(card, rotate=rotate)
+        return str(fp.get("user_agent") or DEFAULT_UA)
 
     def _cookies_path(self) -> str:
         return self.cookies_var.get().strip()
@@ -7284,10 +7453,14 @@ class App(tk.Tk):
             return
         self._thumb_jobs.add(url)
         card = self._cards[index] if 0 <= index < len(self._cards) else None
-        headers = {
-            "User-Agent": (card.user_agent if card and card.user_agent else self._effective_ua()) or DEFAULT_UA,
-            "Referer": self.referer_var.get() or (card.url if card else url) or url,
-        }
+        if card is not None:
+            fp = self._fingerprint_for_card(card, rotate=False)
+            headers = fingerprint_headers(fp, self.referer_var.get() or card.url or url)
+        else:
+            headers = {
+                "User-Agent": self._effective_ua() or DEFAULT_UA,
+                "Referer": self.referer_var.get() or url,
+            }
         try:
             cookies = self._cookies_path()
             if cookies:
@@ -7606,16 +7779,13 @@ class App(tk.Tk):
         cookies = self._cookies_path()
         random_mode = self._random_ua_enabled()
         max_attempts = 3 if random_mode else 1
-        ua = self._ua_for_card(card, rotate=False)
+        fp = self._fingerprint_for_card(card, rotate=False)
 
         def work() -> None:
-            nonlocal ua
+            nonlocal fp
             last_error = "Ошибка"
             for attempt in range(max_attempts):
-                headers = {
-                    "User-Agent": ua or DEFAULT_UA,
-                    "Referer": self.referer_var.get() or url,
-                }
+                headers = fingerprint_headers(fp, self.referer_var.get() or url)
                 try:
                     if cookies:
                         headers = apply_cookies_file(headers, cookies)
@@ -7625,18 +7795,18 @@ class App(tk.Tk):
                 try:
                     with use_download_proxy(proxy, cookies):
                         info = probe_media_info(url, headers, bool(self.insecure_var.get()), None)
-                    info["user_agent"] = ua
+                    info["user_agent"] = str(fp.get("user_agent") or DEFAULT_UA)
+                    info["fingerprint"] = fp
                     self.events.put(("queue_meta", {"index": index, **info}))
                     return
                 except Exception as exc:
                     last_error = str(exc)
                     if attempt + 1 < max_attempts and random_mode:
-                        ua = random_user_agent(exclude=ua)
-                        card.user_agent = ua
+                        fp = self._fingerprint_for_card(card, rotate=True)
                         self.events.put(
                             (
                                 "log",
-                                f"Парсинг не удался (попытка {attempt + 1}/{max_attempts}), новый UA…",
+                                f"Парсинг не удался (попытка {attempt + 1}/{max_attempts}), новый отпечаток…",
                             )
                         )
                         continue
@@ -7651,10 +7821,10 @@ class App(tk.Tk):
             return
         entries = payload.get("entries") or []
         if not entries:
-            self._cards[index].apply_error("В плейлисте нет видео")
+            self._cards[index].apply_error(_("playlist_empty"))
             return
-        self._cards[index].title_var.set(str(payload.get("title") or "Плейлист YouTube"))
-        self._cards[index].meta_var.set(f"Плейлист: {len(entries)} видео — выберите что скачать")
+        self._cards[index].title_var.set(str(payload.get("title") or _("playlist")))
+        self._cards[index].meta_var.set(_("playlist_meta", n=len(entries)))
         self._cards[index].state = "fetch"
         dialog = PlaylistPickerDialog(self, payload)
         self.wait_window(dialog)
@@ -7665,7 +7835,7 @@ class App(tk.Tk):
         # Remove playlist placeholder card, then add selected videos as ready cards.
         self.remove_card(index)
         self.empty_wrap.pack_forget()
-        qualities = [{"label": "Максимальное (лучшее)", "ytdlp_format": "bv*+ba/b", "choice_url": None}]
+        qualities = [{"label": _("best_quality"), "ytdlp_format": "bv*+ba/b", "choice_url": None}]
         for entry in selected:
             url = str(entry.get("url") or "")
             if not url:
@@ -7675,6 +7845,8 @@ class App(tk.Tk):
             card.pack(fill="x", pady=8)
             self._cards.append(card)
             self._queue_items.append({"url": url, "state": "ready", "title": entry.get("title")})
+            # Unique browser fingerprint per playlist video.
+            fp = self._fingerprint_for_card(card, rotate=False)
             card.apply_probe(
                 {
                     "url": url,
@@ -7686,9 +7858,11 @@ class App(tk.Tk):
                     "mode": "ytdlp",
                     "ytdlp_url": url,
                     "qualities": list(qualities),
+                    "user_agent": str(fp.get("user_agent") or DEFAULT_UA),
+                    "fingerprint": fp,
                 }
             )
-        self.status_var.set(f"Добавлено из плейлиста: {len(selected)}")
+        self.status_var.set(_("playlist_added", n=len(selected)))
 
     def clear_download_history_file(self) -> None:
         try:
@@ -7849,8 +8023,10 @@ class App(tk.Tk):
         quality = card.selected_quality()
         params = self._snapshot()
         params["source"] = card.url
-        # Keep the same UA that successfully probed this card (especially in random mode).
-        params["user_agent"] = self._ua_for_card(card, rotate=False)
+        # Keep the same fingerprint that successfully probed this card.
+        fp = self._fingerprint_for_card(card, rotate=False)
+        params["user_agent"] = str(fp.get("user_agent") or DEFAULT_UA)
+        params["fingerprint"] = fp
         params["name_edited"] = False
         if card.probe.get("title"):
             params["filename"] = sanitize_filename(str(card.probe["title"])) + ".mp4"
