@@ -322,6 +322,113 @@ def sanitize_filename(name: str) -> str:
     return cleaned or "video"
 
 
+DEFAULT_FILENAME_TEMPLATE = "{title}_{date}"
+FILENAME_TEMPLATE_HINT = "{title} {date} {time} {datetime} {id} {site} {ext}"
+
+
+def site_label_from_url(url: str) -> str:
+    try:
+        host = urllib.parse.urlsplit(url).netloc.lower()
+    except Exception:
+        return ""
+    if host.startswith("www."):
+        host = host[4:]
+    return sanitize_filename(host.split(":")[0]) if host else ""
+
+
+def video_id_from_url(url: str) -> str:
+    """Best-effort video id for templates ({id})."""
+    if not url:
+        return ""
+    parts = urllib.parse.urlsplit(url)
+    query = urllib.parse.parse_qs(parts.query)
+    for key in ("v", "video_id", "vid", "id"):
+        values = query.get(key) or []
+        if values and values[0]:
+            return sanitize_filename(str(values[0])[:64])
+    path = parts.path.rstrip("/")
+    if not path:
+        return ""
+    last = path.split("/")[-1]
+    if last.lower().endswith((".mp4", ".m3u8", ".webm", ".mkv")):
+        last = last.rsplit(".", 1)[0]
+    # YouTube /watch already handled; short URLs /shorts/ID, youtu.be/ID
+    if last and last not in {"watch", "video", "embed", "v", "playlist", "channel"}:
+        return sanitize_filename(last[:64])
+    return ""
+
+
+def apply_filename_template(
+    template: str,
+    *,
+    title: str = "",
+    url: str = "",
+    ext: str = "mp4",
+    when: datetime | None = None,
+) -> str:
+    """Build a filename from a user template. Missing tokens become empty."""
+    when = when or datetime.now()
+    ext = (ext or "mp4").lstrip(".").lower() or "mp4"
+    title_text = sanitize_filename(str(title or "").strip() or "video")
+    values = {
+        "title": title_text,
+        "date": when.strftime("%Y-%m-%d"),
+        "time": when.strftime("%H-%M-%S"),
+        "datetime": when.strftime("%Y-%m-%d_%H-%M-%S"),
+        "id": video_id_from_url(url) or "",
+        "site": site_label_from_url(url),
+        "ext": ext,
+    }
+    raw = (template or "").strip() or DEFAULT_FILENAME_TEMPLATE
+    # Support both {token} and $token style lightly — only braces.
+    result = raw
+    for key, value in values.items():
+        result = result.replace("{" + key + "}", value)
+    # Strip leftover unknown {tokens}
+    result = re.sub(r"\{[a-zA-Z0-9_]+\}", "", result)
+    result = re.sub(r"[\\/]+", "_", result)
+    result = re.sub(r"\s+", " ", result).strip(" ._")
+    stem = sanitize_filename(result) or title_text
+    # Drop extension if template already ended with .{ext} / .mp4
+    lower = stem.lower()
+    if lower.endswith("." + ext):
+        stem = stem[: -(len(ext) + 1)]
+    elif lower.endswith(".mp4"):
+        stem = stem[:-4]
+    stem = sanitize_filename(stem) or title_text
+    return f"{stem}.{ext}"
+
+
+def resolve_download_filename(
+    params: dict,
+    *,
+    title: str | None = None,
+    when: datetime | None = None,
+) -> str:
+    """Final download filename: manual name or template."""
+    when = when or datetime.now()
+    ext = "mp4"
+    if params.get("name_edited"):
+        raw = str(params.get("filename") or "video.mp4").strip() or "video.mp4"
+        stem = sanitize_filename(Path(raw).stem) or "video"
+        return f"{stem}.{ext}"
+    tpl = str(params.get("filename_template") or DEFAULT_FILENAME_TEMPLATE)
+    use_title = (
+        (title if title is not None else None)
+        or params.get("title")
+        or Path(str(params.get("filename") or "video")).stem
+        or "video"
+    )
+    url = str(
+        params.get("source")
+        or params.get("ytdlp_url")
+        or params.get("probe_referer")
+        or params.get("referer")
+        or ""
+    )
+    return apply_filename_template(tpl, title=str(use_title), url=url, ext=ext, when=when)
+
+
 def unique_path(path: Path) -> Path:
     if not path.exists():
         return path
@@ -4519,7 +4626,7 @@ def _download_job_inner(
                 headers["Referer"] = page_info.referer
                 headers.setdefault("Origin", page_origin(page_info.referer).rstrip("/"))
             if page_info.title and not params["name_edited"]:
-                safe = sanitize_filename(page_info.title) + ".mp4"
+                safe = resolve_download_filename(params, title=page_info.title)
                 events.put(("suggested_name", safe))
                 params["filename"] = safe
             if page_info.thumbnail:
@@ -4547,7 +4654,7 @@ def _download_job_inner(
                 if params.get("thumbnail") and not page_info.thumbnail:
                     page_info.thumbnail = str(params["thumbnail"])
                 if page_info.title and not params["name_edited"]:
-                    safe = sanitize_filename(page_info.title) + ".mp4"
+                    safe = resolve_download_filename(params, title=page_info.title)
                     events.put(("suggested_name", safe))
                     params["filename"] = safe
                 if page_info.thumbnail:
@@ -4555,7 +4662,7 @@ def _download_job_inner(
             elif params.get("probed") and params.get("title"):
                 # Local playlist / already-resolved URL with probe metadata only.
                 if params.get("title") and not params["name_edited"]:
-                    safe = sanitize_filename(str(params["title"])) + ".mp4"
+                    safe = resolve_download_filename(params, title=str(params["title"]))
                     events.put(("suggested_name", safe))
                     params["filename"] = safe
                 if params.get("thumbnail"):
@@ -4573,13 +4680,14 @@ def _download_job_inner(
             page_url = source_url[len("ytdlp:") :]
             output_dir = Path(params["output_dir"])
             output_dir.mkdir(parents=True, exist_ok=True)
-            filename = sanitize_filename(params["filename"])
-            if not filename.lower().endswith(".mp4"):
-                filename += ".mp4"
-            if params.get("live"):
-                stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-                stem = Path(filename).stem
-                filename = f"{stem}_{stamp}.mp4"
+            live_params = params
+            if params.get("live") and not params.get("name_edited"):
+                tpl = str(params.get("filename_template") or DEFAULT_FILENAME_TEMPLATE)
+                if "{date}" not in tpl and "{time}" not in tpl and "{datetime}" not in tpl:
+                    live_params = dict(params)
+                    live_params["filename_template"] = tpl.rstrip() + "_{datetime}"
+            filename = resolve_download_filename(live_params)
+            params["filename"] = filename
             output = unique_path(output_dir / filename)
             events.put(("output", str(output)))
             events.put(("log", f"Файл: {output}"))
@@ -4613,9 +4721,8 @@ def _download_job_inner(
 
         output_dir = Path(params["output_dir"])
         output_dir.mkdir(parents=True, exist_ok=True)
-        filename = sanitize_filename(params["filename"])
-        if not filename.lower().endswith(".mp4"):
-            filename += ".mp4"
+        filename = resolve_download_filename(params)
+        params["filename"] = filename
         output = unique_path(output_dir / filename)
 
         if page_info is not None and page_info.browser:
@@ -4669,9 +4776,13 @@ def _download_job_inner(
         events.put(("log", f"Качество: {resolved.label}"))
 
         if not resolved.is_vod and not params["name_edited"]:
-            stamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
-            output = output.with_name(f"{output.stem}_{stamp}{output.suffix}")
-            output = unique_path(output)
+            tpl = str(params.get("filename_template") or DEFAULT_FILENAME_TEMPLATE)
+            if "{date}" not in tpl and "{time}" not in tpl and "{datetime}" not in tpl:
+                live_params = dict(params)
+                live_params["filename_template"] = tpl.rstrip() + "_{datetime}"
+                filename = resolve_download_filename(live_params)
+                params["filename"] = filename
+                output = unique_path(output_dir / filename)
         events.put(("output", str(output)))
         events.put(("log", f"Файл: {output}"))
 
@@ -4947,7 +5058,12 @@ _CURRENT_LANG = LANG_RU
 
 I18N: dict[str, dict[str, str]] = {
     LANG_RU: {
-        "settings_sub": "Внешний вид, язык, прокси, User-Agent и cookies",
+        "settings_sub": "Внешний вид, язык, папка, шаблон имени, прокси, User-Agent и cookies",
+        "filename_template": "Имя файла",
+        "filename_template_help": "Нажмите плейсхолдер, чтобы вставить в шаблон. По умолчанию есть дата — файлы не перезаписываются.",
+        "filename_template_tokens": "Плейсхолдеры",
+        "filename_template_preview": "Пример: {name}",
+        "filename_template_reset": "Сброс",
         "settings": "Настройки",
         "clear": "Очистить",
         "history": "История",
@@ -5063,7 +5179,12 @@ I18N: dict[str, dict[str, str]] = {
         "err_timeout": "Таймаут сети. Проверьте интернет или прокси.",
     },
     LANG_EN: {
-        "settings_sub": "Appearance, language, proxy, User-Agent and cookies",
+        "settings_sub": "Appearance, language, folder, filename template, proxy, User-Agent and cookies",
+        "filename_template": "Filename",
+        "filename_template_help": "Click a placeholder to insert it. Date is included by default so files are not overwritten.",
+        "filename_template_tokens": "Placeholders",
+        "filename_template_preview": "Example: {name}",
+        "filename_template_reset": "Reset",
         "settings": "Settings",
         "clear": "Clear",
         "history": "History",
@@ -6511,6 +6632,8 @@ class App(tk.Tk):
         self.stop_btn.pack(side="left", padx=(0, 4))
 
         self.dir_var = tk.StringVar(value=self.settings.get("output_dir") or str(default_output_dir()))
+        saved_tpl = str(self.settings.get("filename_template") or DEFAULT_FILENAME_TEMPLATE).strip()
+        self.filename_template_var = tk.StringVar(value=saved_tpl or DEFAULT_FILENAME_TEMPLATE)
         self.name_var = tk.StringVar(value="video.mp4")
         self.name_var.trace_add("write", self._on_name_write)
         self.ua_var = tk.StringVar(value=self.settings.get("user_agent") or DEFAULT_UA)
@@ -7118,6 +7241,91 @@ class App(tk.Tk):
         ttk.Entry(folder_row, textvariable=self.dir_var).pack(side="left", fill="x", expand=True)
         ttk.Button(folder_row, text=_("browse"), command=self.browse_dir).pack(side="left", padx=(8, 0))
 
+        name_tpl_row = tk.Frame(general, bg=t["card"])
+        name_tpl_row.pack(fill="x", pady=(0, 4))
+        tk.Label(
+            name_tpl_row,
+            text=_("filename_template"),
+            bg=t["card"],
+            fg=t["muted"],
+            font=("Segoe UI", 9),
+            width=12,
+            anchor="w",
+        ).pack(side="left")
+        tpl_entry = ttk.Entry(name_tpl_row, textvariable=self.filename_template_var)
+        tpl_entry.pack(side="left", fill="x", expand=True)
+        ttk.Button(
+            name_tpl_row,
+            text=_("filename_template_reset"),
+            command=lambda: self.filename_template_var.set(DEFAULT_FILENAME_TEMPLATE),
+        ).pack(side="left", padx=(8, 0))
+
+        token_row = tk.Frame(general, bg=t["card"])
+        token_row.pack(fill="x", pady=(2, 2))
+        tk.Label(
+            token_row,
+            text=_("filename_template_tokens") + ":",
+            bg=t["card"],
+            fg=t["text"],
+            font=(UI_FONT_SEMI, 9),
+            anchor="w",
+        ).pack(side="left", padx=(0, 8))
+
+        def _insert_token(token: str) -> None:
+            try:
+                tpl_entry.focus_set()
+                tpl_entry.insert("insert", token)
+            except tk.TclError:
+                current = self.filename_template_var.get()
+                self.filename_template_var.set(current + token)
+
+        for token in ("{title}", "{date}", "{time}", "{datetime}", "{id}", "{site}", "{ext}"):
+            btn = tk.Label(
+                token_row,
+                text=token,
+                bg=t["chip"],
+                fg=t["accent"],
+                font=(UI_FONT, 9),
+                padx=6,
+                pady=2,
+                cursor="hand2",
+            )
+            btn.pack(side="left", padx=(0, 4))
+            btn.bind("<Button-1>", lambda _e, tok=token: _insert_token(tok))
+            btn.bind("<Enter>", lambda _e, w=btn: w.configure(bg=t["chip_hover"]))
+            btn.bind("<Leave>", lambda _e, w=btn: w.configure(bg=t["chip"]))
+
+        tpl_preview = tk.StringVar()
+
+        def _refresh_tpl_preview(*_args) -> None:
+            sample = apply_filename_template(
+                self.filename_template_var.get(),
+                title="My Video",
+                url="https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            )
+            tpl_preview.set(_("filename_template_preview", name=sample))
+
+        self.filename_template_var.trace_add("write", _refresh_tpl_preview)
+        _refresh_tpl_preview()
+        tk.Label(
+            general,
+            textvariable=tpl_preview,
+            bg=t["card"],
+            fg=t["accent"],
+            font=(UI_FONT, 9),
+            anchor="w",
+        ).pack(fill="x", pady=(2, 2))
+        tk.Label(
+            general,
+            text=_("filename_template_help"),
+            bg=t["card"],
+            fg=t["muted"],
+            font=(UI_FONT, 8),
+            anchor="w",
+            wraplength=560,
+            justify="left",
+        ).pack(fill="x", pady=(0, 8))
+
         threads_row = tk.Frame(general, bg=t["card"])
         threads_row.pack(fill="x", pady=(0, 8))
         tk.Label(threads_row, text=_("threads_hls"), bg=t["card"], fg=t["muted"], font=("Segoe UI", 9), width=12, anchor="w").pack(
@@ -7711,6 +7919,9 @@ class App(tk.Tk):
             "audio_choice": self._audio_choice(),
             "output_dir": self.dir_var.get().strip() or str(default_output_dir()),
             "filename": self.name_var.get().strip() or "video.mp4",
+            "filename_template": (
+                self.filename_template_var.get().strip() or DEFAULT_FILENAME_TEMPLATE
+            ),
             "name_edited": self._name_edited,
             "user_agent": self._effective_ua(),
             "referer": self.referer_var.get(),
@@ -8028,10 +8239,12 @@ class App(tk.Tk):
         params["user_agent"] = str(fp.get("user_agent") or DEFAULT_UA)
         params["fingerprint"] = fp
         params["name_edited"] = False
-        if card.probe.get("title"):
-            params["filename"] = sanitize_filename(str(card.probe["title"])) + ".mp4"
-        else:
-            params["filename"] = name_from_url(card.url)
+        params["filename_template"] = (
+            self.filename_template_var.get().strip() or DEFAULT_FILENAME_TEMPLATE
+        )
+        title = str(card.probe.get("title") or "") or Path(name_from_url(card.url)).stem
+        params["title"] = title
+        params["filename"] = resolve_download_filename(params, title=title)
         params["choice_url"] = quality.get("choice_url")
         audio_tracks = card.selected_audio_tracks()
         format_spec, multistreams, fast_client = build_ytdlp_audio_format(quality, audio_tracks)
@@ -8039,7 +8252,6 @@ class App(tk.Tk):
         params["audio_multistreams"] = multistreams
         params["use_fast_youtube_client"] = fast_client
         params["selected_audio"] = audio_tracks
-        params["title"] = card.probe.get("title")
         params["thumbnail"] = card.probe.get("thumbnail")
         params["live"] = bool(card.probe.get("live"))
         if card.probe.get("mode") == "ytdlp" and card.probe.get("ytdlp_url"):
@@ -8295,6 +8507,9 @@ class App(tk.Tk):
         remember = bool(self.remember_geometry_var.get())
         data = {
             "output_dir": self.dir_var.get().strip(),
+            "filename_template": (
+                self.filename_template_var.get().strip() or DEFAULT_FILENAME_TEMPLATE
+            ),
             "user_agent": (
                 DEFAULT_UA
                 if self._random_ua_enabled() or self.ua_var.get().strip().startswith("(")
@@ -8393,6 +8608,14 @@ https://cdn.example/b.ts
     assert "https://cdn.example/v/seg.ts?token=abc" in absolute
     assert name_from_url("https://host/channels/news/index.m3u8?token=1") == "news.mp4"
     assert sanitize_filename('a<>:"b') == "ab"
+    sample = apply_filename_template(
+        "{title}_{date}",
+        title='My<>Video',
+        url="https://www.youtube.com/watch?v=abc123",
+        when=datetime(2026, 10, 7, 15, 30, 0),
+    )
+    assert sample == "MyVideo_2026-10-07.mp4"
+    assert video_id_from_url("https://www.youtube.com/watch?v=abc123") == "abc123"
     try:
         parse_playlist("<html><body>login</body></html>", "https://cdn.example/x.m3u8")
         raise AssertionError("html should fail")
