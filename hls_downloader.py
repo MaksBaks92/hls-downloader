@@ -5096,8 +5096,11 @@ I18N: dict[str, dict[str, str]] = {
         "recording": "Запись эфира…",
         "downloading": "Скачиваю…",
         "recording_saved": "Запись сохранена",
-        "toast_done": "Готово",
-        "toast_error": "Ошибка",
+        "toast_done": "Скачивание завершено",
+        "toast_error": "Ошибка скачивания",
+        "toast_open": "Открыть",
+        "toast_folder": "Папка",
+        "toast_dismiss": "Закрыть",
         "error_download": "Ошибка скачивания",
         "no_link": "Нет ссылки",
         "no_link_body": "Вставьте одну или несколько ссылок.",
@@ -5217,8 +5220,11 @@ I18N: dict[str, dict[str, str]] = {
         "recording": "Recording live…",
         "downloading": "Downloading…",
         "recording_saved": "Recording saved",
-        "toast_done": "Done",
-        "toast_error": "Error",
+        "toast_done": "Download finished",
+        "toast_error": "Download failed",
+        "toast_open": "Open",
+        "toast_folder": "Folder",
+        "toast_dismiss": "Close",
         "error_download": "Download failed",
         "no_link": "No link",
         "no_link_body": "Paste one or more links.",
@@ -6932,42 +6938,209 @@ class App(tk.Tk):
         self._maybe_suggest_name()
         self.status_var.set(_("clipboard_link"))
 
-    def show_toast(self, title: str, message: str, *, ok: bool = True) -> None:
+    def show_toast(
+        self,
+        title: str,
+        message: str = "",
+        *,
+        ok: bool = True,
+        path: str = "",
+        video_title: str = "",
+    ) -> None:
         if not bool(self.notify_var.get()):
             return
         play_alert_sound(ok)
         theme = self.theme
+        # Replace previous toast so they don't stack crookedly.
+        prev = getattr(self, "_toast_win", None)
+        if prev is not None:
+            try:
+                prev.destroy()
+            except tk.TclError:
+                pass
+            self._toast_win = None
+
         toast = tk.Toplevel(self)
+        self._toast_win = toast
         toast.overrideredirect(True)
         toast.attributes("-topmost", True)
         try:
-            toast.attributes("-alpha", 0.96)
+            toast.attributes("-alpha", 0.98)
         except tk.TclError:
             pass
-        toast.configure(bg=theme["card"])
-        frame = tk.Frame(toast, bg=theme["card"], highlightthickness=1, highlightbackground=theme["border"])
-        frame.pack(fill="both", expand=True)
+        toast.configure(bg=theme["border"])
+
+        shell = tk.Frame(toast, bg=theme["card"], highlightthickness=0)
+        shell.pack(fill="both", expand=True, padx=1, pady=1)
+
         accent = theme["success"] if ok else theme["danger"]
-        tk.Frame(frame, bg=accent, width=4).pack(side="left", fill="y")
-        body = tk.Frame(frame, bg=theme["card"])
-        body.pack(side="left", fill="both", expand=True, padx=12, pady=10)
-        tk.Label(body, text=title, bg=theme["card"], fg=theme["text"], font=(UI_FONT_SEMI, 10), anchor="w").pack(fill="x")
+        top = tk.Frame(shell, bg=theme["card"])
+        top.pack(fill="x", padx=14, pady=(12, 0))
+        mark = "✓" if ok else "!"
         tk.Label(
-            body,
-            text=message[:120],
+            top,
+            text=mark,
+            bg=accent,
+            fg="#ffffff" if ok else "#ffffff",
+            font=(UI_FONT_SEMI, 11),
+            width=2,
+            padx=4,
+            pady=2,
+        ).pack(side="left")
+        tk.Label(
+            top,
+            text=title,
             bg=theme["card"],
-            fg=theme["muted"],
-            font=(UI_FONT, 9),
+            fg=theme["text"],
+            font=(UI_FONT_SEMI, 11),
             anchor="w",
-            wraplength=280,
-            justify="left",
-        ).pack(fill="x", pady=(4, 0))
-        self.update_idletasks()
-        width, height = 320, 78
-        x = self.winfo_rootx() + self.winfo_width() - width - 24
-        y = self.winfo_rooty() + self.winfo_height() - height - 48
-        toast.geometry(f"{width}x{height}+{max(0, x)}+{max(0, y)}")
-        toast.after(3500, toast.destroy)
+        ).pack(side="left", padx=(10, 0), fill="x", expand=True)
+
+        body = tk.Frame(shell, bg=theme["card"])
+        body.pack(fill="both", expand=True, padx=14, pady=(10, 8))
+
+        primary = (video_title or message or "").strip()
+        if primary:
+            tk.Label(
+                body,
+                text=primary[:140],
+                bg=theme["card"],
+                fg=theme["text"],
+                font=(UI_FONT, 10),
+                anchor="w",
+                justify="left",
+                wraplength=360,
+            ).pack(fill="x")
+
+        out_path = Path(path) if path else None
+        meta_bits: list[str] = []
+        if out_path is not None and out_path.exists():
+            meta_bits.append(out_path.name)
+            try:
+                meta_bits.append(fmt_size(float(out_path.stat().st_size)))
+            except OSError:
+                pass
+        elif message and message != primary:
+            meta_bits.append(message[:120])
+        if meta_bits:
+            tk.Label(
+                body,
+                text=" · ".join(meta_bits),
+                bg=theme["card"],
+                fg=theme["muted"],
+                font=(UI_FONT, 9),
+                anchor="w",
+                justify="left",
+                wraplength=360,
+            ).pack(fill="x", pady=(4, 0))
+        if out_path is not None and out_path.parent.exists():
+            tk.Label(
+                body,
+                text=str(out_path.parent),
+                bg=theme["card"],
+                fg=theme["muted"],
+                font=(UI_FONT, 8),
+                anchor="w",
+                justify="left",
+                wraplength=360,
+            ).pack(fill="x", pady=(2, 0))
+        elif not ok and message and message == primary:
+            pass
+
+        actions = tk.Frame(shell, bg=theme["card"])
+        actions.pack(fill="x", padx=14, pady=(4, 12))
+
+        def _close(_event=None) -> None:
+            try:
+                toast.destroy()
+            except tk.TclError:
+                pass
+            if getattr(self, "_toast_win", None) is toast:
+                self._toast_win = None
+
+        def _open_file() -> None:
+            if out_path is not None and out_path.exists():
+                open_path(out_path)
+            _close()
+
+        def _open_folder() -> None:
+            if out_path is not None and out_path.parent.exists():
+                open_path(out_path.parent)
+            _close()
+
+        if ok and out_path is not None and out_path.exists():
+            tk.Button(
+                actions,
+                text=_("toast_open"),
+                command=_open_file,
+                bg=theme["accent"],
+                fg=theme["accent_text"],
+                activebackground=theme["accent_hover"],
+                activeforeground=theme["accent_text"],
+                relief="flat",
+                font=(UI_FONT_SEMI, 9),
+                padx=12,
+                pady=4,
+                cursor="hand2",
+                bd=0,
+            ).pack(side="left")
+            tk.Button(
+                actions,
+                text=_("toast_folder"),
+                command=_open_folder,
+                bg=theme["chip"],
+                fg=theme["text"],
+                activebackground=theme["chip_hover"],
+                activeforeground=theme["text"],
+                relief="flat",
+                font=(UI_FONT, 9),
+                padx=12,
+                pady=4,
+                cursor="hand2",
+                bd=0,
+            ).pack(side="left", padx=(8, 0))
+        tk.Button(
+            actions,
+            text=_("toast_dismiss"),
+            command=_close,
+            bg=theme["chip"],
+            fg=theme["muted"],
+            activebackground=theme["chip_hover"],
+            activeforeground=theme["text"],
+            relief="flat",
+            font=(UI_FONT, 9),
+            padx=12,
+            pady=4,
+            cursor="hand2",
+            bd=0,
+        ).pack(side="right")
+
+        toast.bind("<Escape>", _close)
+        toast.update_idletasks()
+        width = max(380, min(440, shell.winfo_reqwidth() + 4))
+        height = max(110, shell.winfo_reqheight() + 4)
+        try:
+            ax = self.winfo_rootx()
+            ay = self.winfo_rooty()
+            aw = self.winfo_width()
+            ah = self.winfo_height()
+        except tk.TclError:
+            ax = ay = 40
+            aw = ah = 800
+        x = ax + aw - width - 20
+        y = ay + ah - height - 28
+        # Keep fully on the current monitor work area.
+        try:
+            sw = toast.winfo_screenwidth()
+            sh = toast.winfo_screenheight()
+            x = max(8, min(x, sw - width - 8))
+            y = max(8, min(y, sh - height - 8))
+        except tk.TclError:
+            x = max(8, x)
+            y = max(8, y)
+        toast.geometry(f"{width}x{height}+{x}+{y}")
+        # Success stays longer so user can open the file; errors a bit longer to read.
+        toast.after(8000 if ok else 10000, _close)
 
     def reprobe_card(self, index: int) -> None:
         if not (0 <= index < len(self._cards)):
@@ -8433,7 +8606,12 @@ class App(tk.Tk):
                                     "when": datetime.now().isoformat(timespec="seconds"),
                                 }
                             )
-                            self.show_toast(_("toast_done"), card.title_var.get()[:80] or detail, ok=True)
+                            self.show_toast(
+                                _("toast_done"),
+                                ok=True,
+                                path=out,
+                                video_title=str(card.title_var.get() or detail),
+                            )
                         else:
                             err = friendly_download_error(payload.get("error") or _("error_download"))
                             card.apply_error(err)
@@ -8446,7 +8624,12 @@ class App(tk.Tk):
                                     "when": datetime.now().isoformat(timespec="seconds"),
                                 }
                             )
-                            self.show_toast(_("toast_error"), err[:100], ok=False)
+                            self.show_toast(
+                                _("toast_error"),
+                                err,
+                                ok=False,
+                                video_title=str(card.title_var.get() or ""),
+                            )
                     busy = any(c.state == "run" for c in self._cards)
                     self._set_busy(busy)
                     if not busy:
