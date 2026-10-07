@@ -142,6 +142,8 @@ USER_AGENT_PRESETS: dict[str, str | None] = {
 DEFAULT_THREADS = 24
 DEFAULT_DIRECT_THREADS = 12
 MAX_THREADS = 64
+DEFAULT_CONCURRENT = 2
+MAX_CONCURRENT = 8
 CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 PROXY_SCHEMES = ("http", "https", "socks5", "socks5h")
 _DOWNLOAD_CTX = threading.local()
@@ -282,6 +284,17 @@ def clamp_threads(value: int | str | None) -> int:
     except (TypeError, ValueError):
         threads = DEFAULT_THREADS
     return max(1, min(MAX_THREADS, threads))
+
+
+def clamp_concurrent(value: int | str | None) -> int:
+    try:
+        if value is None or value == "":
+            n = DEFAULT_CONCURRENT
+        else:
+            n = int(value)
+    except (TypeError, ValueError):
+        n = DEFAULT_CONCURRENT
+    return max(1, min(MAX_CONCURRENT, n))
 
 
 def human_bitrate(bps: int) -> str:
@@ -5072,6 +5085,11 @@ I18N: dict[str, dict[str, str]] = {
         "proxy_on": "Прокси · {proxy}",
         "url_placeholder": "Вставьте ссылку на видео…  Ctrl+V",
         "add": "Добавить",
+        "download_all": "Скачать все",
+        "queued": "В очереди…",
+        "concurrent": "Параллельно",
+        "concurrent_help": "Сколько видео качать одновременно (1–8). Остальные ждут в очереди.",
+        "card_filename": "Файл",
         "stop": "Стоп",
         "empty_title": "Очередь пуста",
         "empty_hint": "YouTube · VK · Rutube · Chaturbate · HLS\nВставьте ссылку сверху и нажмите Добавить",
@@ -5196,6 +5214,11 @@ I18N: dict[str, dict[str, str]] = {
         "proxy_on": "Proxy · {proxy}",
         "url_placeholder": "Paste a video link…  Ctrl+V",
         "add": "Add",
+        "download_all": "Download all",
+        "queued": "Queued…",
+        "concurrent": "Parallel",
+        "concurrent_help": "How many videos to download at once (1–8). The rest wait in queue.",
+        "card_filename": "File",
         "stop": "Stop",
         "empty_title": "Queue is empty",
         "empty_hint": "YouTube · VK · Rutube · Chaturbate · HLS\nPaste a link above and click Add",
@@ -5833,6 +5856,10 @@ class DownloadCard(tk.Frame):
         self._eta = ""
         self.cancel = threading.Event()
         self.worker: threading.Thread | None = None
+        self.filename_var = tk.StringVar(value="")
+        self._filename_edited = False
+        self._setting_filename = False
+        self.filename_var.trace_add("write", self._on_filename_write)
 
         self.rail = tk.Frame(self, bg=theme["rail"], width=3)
         self.rail.pack(side="left", fill="y")
@@ -5921,6 +5948,21 @@ class DownloadCard(tk.Frame):
             state="disabled",
         )
         self.download_btn.pack(side="left")
+
+        self.name_frame = tk.Frame(mid, bg=theme["card"])
+        self.name_frame.pack(fill="x", pady=(8, 0))
+        self.filename_label = tk.Label(
+            self.name_frame,
+            text=_("card_filename"),
+            bg=theme["card"],
+            fg=theme["muted"],
+            font=(UI_FONT, 9),
+            width=6,
+            anchor="w",
+        )
+        self.filename_label.pack(side="left")
+        self.filename_entry = ttk.Entry(self.name_frame, textvariable=self.filename_var)
+        self.filename_entry.pack(side="left", fill="x", expand=True, padx=(8, 0))
 
         self.progress_frame = tk.Frame(mid, bg=theme["card"])
         self.bar_wrap = tk.Frame(self.progress_frame, bg=theme["accent_dim"], height=8)
@@ -6015,6 +6057,8 @@ class DownloadCard(tk.Frame):
 
     def _show_fetching(self) -> None:
         self.configure_frame.pack_forget()
+        if hasattr(self, "name_frame"):
+            self.name_frame.pack_forget()
         self.retry_row.pack_forget()
         if hasattr(self, "retry_download_btn"):
             try:
@@ -6041,6 +6085,8 @@ class DownloadCard(tk.Frame):
                 pass
         self.progress_frame.pack_forget()
         self.configure_frame.pack(fill="x")
+        if hasattr(self, "name_frame"):
+            self.name_frame.pack(fill="x", pady=(8, 0), before=self.meta_label)
         self._refresh_audio_button()
         self._update_audio_meta()
         self.download_btn.configure(text=_("download"), state="normal", command=self._start_download)
@@ -6054,10 +6100,37 @@ class DownloadCard(tk.Frame):
 
     def _show_progress(self) -> None:
         self.configure_frame.pack_forget()
+        if hasattr(self, "name_frame"):
+            self.name_frame.pack_forget()
         self.retry_row.pack_forget()
         self.progress_frame.pack(fill="x")
         self.download_btn.configure(state="disabled")
         self._set_btn_enabled(self.btn_download, False)
+
+    def _on_filename_write(self, *_args) -> None:
+        if not self._setting_filename:
+            self._filename_edited = True
+
+    def _set_filename(self, name: str) -> None:
+        self._setting_filename = True
+        self.filename_var.set(name)
+        self._setting_filename = False
+
+    def refresh_suggested_filename(self) -> None:
+        """Fill filename from template unless the user edited it."""
+        if self._filename_edited and self.filename_var.get().strip():
+            return
+        title = str(self.probe.get("title") or self.title_var.get() or Path(name_from_url(self.url)).stem)
+        params = {
+            "filename_template": (
+                self.app.filename_template_var.get().strip() or DEFAULT_FILENAME_TEMPLATE
+            ),
+            "title": title,
+            "source": self.url,
+            "name_edited": False,
+        }
+        self._set_filename(resolve_download_filename(params, title=title))
+        self._filename_edited = False
 
     def _refresh_audio_button(self) -> None:
         self.audio_btn.pack_forget()
@@ -6176,9 +6249,14 @@ class DownloadCard(tk.Frame):
     def apply_language(self) -> None:
         self.quality_label.configure(text=_("quality"))
         self.audio_btn.configure(text=_("audio_pick"))
+        if hasattr(self, "filename_label"):
+            self.filename_label.configure(text=_("card_filename"))
         if self.state in {"ready", "stop"}:
             self.download_btn.configure(text=_("download"))
             self._update_audio_meta()
+        elif self.state == "queued":
+            self.download_btn.configure(text=_("queued"))
+            self.meta_var.set(_("queued"))
         elif self.state == "fetch":
             self.meta_var.set(_("fetching"))
             self.download_btn.configure(text=_("download"))
@@ -6250,6 +6328,7 @@ class DownloadCard(tk.Frame):
         self.quality_var.set(labels[0])
         self.audio_tracks = list(data.get("audio_tracks") or [])
         self._set_selected_audio(self._default_audio_selection())
+        self.refresh_suggested_filename()
         self._show_ready()
         if self.user_agent:
             short = self.user_agent.replace("Mozilla/5.0 ", "")[:40]
@@ -6319,12 +6398,12 @@ class DownloadCard(tk.Frame):
         self.app.reprobe_card(self.index)
 
     def _retry_download(self) -> None:
-        if self.state == "run":
+        if self.state in {"run", "queued"}:
             return
         # Fresh fingerprint per retry attempt.
         self.user_agent = ""
         self.fingerprint = None
-        self.app.start_card_download(self.index)
+        self.app.enqueue_card_download(self.index)
 
     def _retry(self) -> None:
         self._reparse()
@@ -6395,13 +6474,14 @@ class DownloadCard(tk.Frame):
         self._paint_progress()
 
     def _start_download(self) -> None:
-        if self.state not in ("ready", "err", "ok", "stop"):
-            if self.state == "run":
-                return
+        if self.state == "run" or self.state == "queued":
+            return
         if self.state == "ok" and self.output:
             self._open_file()
             return
-        self.app.start_card_download(self.index)
+        if self.state not in ("ready", "err", "stop"):
+            return
+        self.app.enqueue_card_download(self.index)
 
     def _remove(self) -> None:
         if self.state == "run":
@@ -6620,6 +6700,23 @@ class App(tk.Tk):
         )
         self.add_btn.pack(side="left", padx=(0, 6))
 
+        self.download_all_btn = tk.Button(
+            shell_inner,
+            text=_("download_all"),
+            command=self.download_all_ready,
+            bg=t["chip"],
+            fg=t["text"],
+            activebackground=t["chip_hover"],
+            activeforeground=t["text"],
+            relief="flat",
+            font=(UI_FONT, 10),
+            padx=14,
+            pady=12,
+            state="disabled",
+            bd=0,
+        )
+        self.download_all_btn.pack(side="left", padx=(0, 6))
+
         self.stop_btn = tk.Button(
             shell_inner,
             text=_("stop"),
@@ -6640,6 +6737,9 @@ class App(tk.Tk):
         self.dir_var = tk.StringVar(value=self.settings.get("output_dir") or str(default_output_dir()))
         saved_tpl = str(self.settings.get("filename_template") or DEFAULT_FILENAME_TEMPLATE).strip()
         self.filename_template_var = tk.StringVar(value=saved_tpl or DEFAULT_FILENAME_TEMPLATE)
+        self.concurrent_var = tk.StringVar(
+            value=str(self.settings.get("concurrent") or DEFAULT_CONCURRENT)
+        )
         self.name_var = tk.StringVar(value="video.mp4")
         self.name_var.trace_add("write", self._on_name_write)
         self.ua_var = tk.StringVar(value=self.settings.get("user_agent") or DEFAULT_UA)
@@ -6827,13 +6927,15 @@ class App(tk.Tk):
             activebackground=t["accent_hover"],
             activeforeground=t["accent_text"],
         )
-        busy = any(c.state == "run" for c in self._cards)
+        busy = any(c.state in {"run", "queued"} for c in self._cards)
         self.stop_btn.configure(
             bg=t["danger"] if busy else t["chip"],
             fg=("#ffffff" if busy else t["muted"]),
             activebackground=t["danger"] if busy else t["chip_hover"],
             activeforeground="#ffffff" if busy else t["text"],
         )
+        if hasattr(self, "download_all_btn"):
+            self._refresh_queue_buttons()
         for btn in (
             self.settings_btn,
             self.history_btn,
@@ -7228,6 +7330,8 @@ class App(tk.Tk):
         self.clear_btn.configure(text=_("clear"))
         self.history_btn.configure(text=_("history"))
         self.add_btn.configure(text=_("add"))
+        if hasattr(self, "download_all_btn"):
+            self.download_all_btn.configure(text=_("download_all"))
         self.stop_btn.configure(text=_("stop"))
         self.empty_label.configure(text=_("empty_title"))
         self.empty_hint.configure(text=_("empty_hint"))
@@ -7511,7 +7615,7 @@ class App(tk.Tk):
         ttk.Entry(threads_row, textvariable=self.limit_var, width=10).pack(side="left")
 
         direct_row = tk.Frame(general, bg=t["card"])
-        direct_row.pack(fill="x")
+        direct_row.pack(fill="x", pady=(0, 8))
         tk.Label(
             direct_row,
             text=_("threads_mp4"),
@@ -7522,6 +7626,24 @@ class App(tk.Tk):
             anchor="w",
         ).pack(side="left")
         ttk.Spinbox(direct_row, from_=1, to=MAX_THREADS, textvariable=self.direct_threads_var, width=8).pack(side="left")
+        concurrent_row = tk.Frame(general, bg=t["card"])
+        concurrent_row.pack(fill="x")
+        tk.Label(
+            concurrent_row,
+            text=_("concurrent"),
+            bg=t["card"],
+            fg=t["muted"],
+            font=("Segoe UI", 9),
+            width=12,
+            anchor="w",
+        ).pack(side="left")
+        ttk.Spinbox(
+            concurrent_row,
+            from_=1,
+            to=MAX_CONCURRENT,
+            textvariable=self.concurrent_var,
+            width=8,
+        ).pack(side="left")
         tk.Label(
             general,
             text=_("threads_help"),
@@ -7532,6 +7654,16 @@ class App(tk.Tk):
             wraplength=560,
             justify="left",
         ).pack(fill="x", pady=(6, 0))
+        tk.Label(
+            general,
+            text=_("concurrent_help"),
+            bg=t["card"],
+            fg=t["muted"],
+            font=(UI_FONT, 8),
+            anchor="w",
+            wraplength=560,
+            justify="left",
+        ).pack(fill="x", pady=(2, 0))
 
         ttk.Checkbutton(
             general,
@@ -8052,8 +8184,8 @@ class App(tk.Tk):
                 item.index = i
         if not self._cards:
             self.empty_wrap.pack(fill="both", expand=True, pady=40)
-        busy = any(c.state == "run" for c in self._cards)
-        self._set_busy(busy)
+        self._pump_downloads()
+        self._refresh_queue_buttons()
 
     def browse_dir(self) -> None:
         current = self.dir_var.get().strip() or str(default_output_dir())
@@ -8110,7 +8242,33 @@ class App(tk.Tk):
             "limit_seconds": limit_seconds,
             "threads": clamp_threads(self.threads_var.get()),
             "direct_threads": clamp_threads(self.direct_threads_var.get()),
+            "concurrent": clamp_concurrent(self.concurrent_var.get()),
         }
+
+    def _refresh_queue_buttons(self) -> None:
+        t = self.theme
+        ready_n = sum(1 for c in self._cards if c.state in {"ready", "err", "stop"})
+        running = any(c.state in {"run", "queued"} for c in self._cards)
+        if hasattr(self, "download_all_btn"):
+            if ready_n > 0:
+                self.download_all_btn.configure(
+                    state="normal",
+                    bg=t["accent"],
+                    fg=t["accent_text"],
+                    activebackground=t["accent_hover"],
+                    activeforeground=t["accent_text"],
+                    cursor="hand2",
+                )
+            else:
+                self.download_all_btn.configure(
+                    state="disabled",
+                    bg=t["chip"],
+                    fg=t["muted"],
+                    activebackground=t["chip_hover"],
+                    activeforeground=t["text"],
+                    cursor="",
+                )
+        self._set_busy(running)
 
     def _set_busy(self, busy: bool) -> None:
         # Keep «Добавить» enabled so new links can join the queue while others download.
@@ -8142,19 +8300,34 @@ class App(tk.Tk):
         if not urls:
             messagebox.showinfo(_("no_link"), _("no_link_body"))
             return
+        existing = {c.url.strip() for c in self._cards}
+        added = 0
+        skipped = 0
         self._persist()
         self.empty_wrap.pack_forget()
         for url in urls:
+            if url.strip() in existing:
+                skipped += 1
+                continue
+            existing.add(url.strip())
             index = len(self._cards)
             card = DownloadCard(self.cards_frame, self, index, url)
             card.pack(fill="x", pady=8)
             self._cards.append(card)
             self._queue_items.append({"url": url, "state": "fetch", "detail": _("fetching")})
             self._start_probe(index, url)
+            added += 1
         self.url_entry.delete(0, "end")
         self.url_entry.insert(0, self._url_placeholder)
         self.url_entry.configure(fg=self.theme["muted"])
-        self.status_var.set(_("queue_count", n=len(self._cards)))
+        if added:
+            msg = _("queue_count", n=len(self._cards))
+            if skipped:
+                msg += f" · −{skipped} дубл."
+            self.status_var.set(msg)
+        elif skipped:
+            self.status_var.set(f"Уже в очереди · пропущено {skipped}")
+        self._refresh_queue_buttons()
 
     def _start_probe(self, index: int, url: str) -> None:
         if not (0 <= index < len(self._cards)):
@@ -8401,6 +8574,49 @@ class App(tk.Tk):
         ).pack(side="left", padx=(8, 0))
         ttk.Button(buttons, text="Закрыть", command=win.destroy).pack(side="right")
 
+    def _max_concurrent(self) -> int:
+        return clamp_concurrent(self.concurrent_var.get())
+
+    def _running_count(self) -> int:
+        return sum(1 for card in self._cards if card.state == "run")
+
+    def download_all_ready(self) -> None:
+        queued = 0
+        for index, card in enumerate(self._cards):
+            if card.state in {"ready", "err", "stop"}:
+                self.enqueue_card_download(index, pump=False)
+                queued += 1
+        if not queued:
+            return
+        self.status_var.set(_("download_all") + f" · {queued}")
+        self._pump_downloads()
+
+    def enqueue_card_download(self, index: int, *, pump: bool = True) -> None:
+        if not (0 <= index < len(self._cards)):
+            return
+        card = self._cards[index]
+        if card.state in {"run", "queued", "fetch"}:
+            return
+        if card.worker and card.worker.is_alive():
+            return
+        card.state = "queued"
+        card.meta_var.set(_("queued"))
+        card.download_btn.configure(text=_("queued"), state="disabled")
+        card._set_btn_enabled(card.btn_download, False)
+        if index < len(self._queue_items):
+            self._queue_items[index].update({"state": "queued", "detail": _("queued")})
+        self._refresh_queue_buttons()
+        if pump:
+            self._pump_downloads()
+
+    def _pump_downloads(self) -> None:
+        while self._running_count() < self._max_concurrent():
+            nxt = next((i for i, c in enumerate(self._cards) if c.state == "queued"), None)
+            if nxt is None:
+                break
+            self.start_card_download(nxt)
+        self._refresh_queue_buttons()
+
     def start_card_download(self, index: int) -> None:
         if not (0 <= index < len(self._cards)):
             return
@@ -8409,6 +8625,9 @@ class App(tk.Tk):
             return
         if card.state == "run":
             return
+        # Allow launch from queued or direct (legacy) ready state.
+        if card.state not in {"queued", "ready", "err", "stop"}:
+            return
         quality = card.selected_quality()
         params = self._snapshot()
         params["source"] = card.url
@@ -8416,13 +8635,21 @@ class App(tk.Tk):
         fp = self._fingerprint_for_card(card, rotate=False)
         params["user_agent"] = str(fp.get("user_agent") or DEFAULT_UA)
         params["fingerprint"] = fp
-        params["name_edited"] = False
         params["filename_template"] = (
             self.filename_template_var.get().strip() or DEFAULT_FILENAME_TEMPLATE
         )
         title = str(card.probe.get("title") or "") or Path(name_from_url(card.url)).stem
         params["title"] = title
-        params["filename"] = resolve_download_filename(params, title=title)
+        manual_name = card.filename_var.get().strip() if hasattr(card, "filename_var") else ""
+        if getattr(card, "_filename_edited", False) and manual_name:
+            params["name_edited"] = True
+            params["filename"] = manual_name if manual_name.lower().endswith(".mp4") else manual_name + ".mp4"
+        else:
+            params["name_edited"] = False
+            if not manual_name:
+                card.refresh_suggested_filename()
+                manual_name = card.filename_var.get().strip()
+            params["filename"] = manual_name or resolve_download_filename(params, title=title)
         params["choice_url"] = quality.get("choice_url")
         audio_tracks = card.selected_audio_tracks()
         format_spec, multistreams, fast_client = build_ytdlp_audio_format(quality, audio_tracks)
@@ -8459,8 +8686,10 @@ class App(tk.Tk):
         card._show_progress()
         start_label = "Запись эфира…" if params.get("live") else "Скачиваю…"
         card.set_progress(None, start_label)
-        self.status_var.set(f"{start_label} {card.title_var.get()[:60]}")
-        self._set_busy(True)
+        running = self._running_count()
+        queued = sum(1 for c in self._cards if c.state == "queued")
+        self.status_var.set(f"{start_label} {card.title_var.get()[:50]} · {running}/{self._max_concurrent()}" + (f" · +{queued}" if queued else ""))
+        self._refresh_queue_buttons()
 
         def work() -> None:
             proxy = IndexedEvents(self.events, index, suppress_done=True)
@@ -8486,7 +8715,12 @@ class App(tk.Tk):
             if card.state == "run":
                 card.cancel.set()
                 card.set_progress(None, "Останавливаю…")
+            elif card.state == "queued":
+                card.state = "ready"
+                card._show_ready()
+                card.meta_var.set(_("ready_download"))
         self.status_var.set("Останавливаю…")
+        self._refresh_queue_buttons()
 
     def _status_for_active(self) -> str:
         parts = []
@@ -8517,10 +8751,12 @@ class App(tk.Tk):
                             if index < len(self._queue_items):
                                 self._queue_items[index].update({"state": "ready", "title": payload.get("title")})
                     self.status_var.set(f"В очереди: {len(self._cards)}")
+                    self._refresh_queue_buttons()
                 elif kind == "queue_meta_error":
                     index = int(payload.get("index", -1))
                     if 0 <= index < len(self._cards):
                         self._cards[index].apply_error(str(payload.get("error") or "Ошибка"))
+                    self._refresh_queue_buttons()
                 elif kind == "thumb_ready":
                     index = int(payload.get("index", -1))
                     if 0 <= index < len(self._cards):
@@ -8630,8 +8866,9 @@ class App(tk.Tk):
                                 ok=False,
                                 video_title=str(card.title_var.get() or ""),
                             )
-                    busy = any(c.state == "run" for c in self._cards)
-                    self._set_busy(busy)
+                    self._pump_downloads()
+                    busy = any(c.state in {"run", "queued"} for c in self._cards)
+                    self._refresh_queue_buttons()
                     if not busy:
                         self.status_var.set(_("ready") if any(c.state == "ok" for c in self._cards) else _("queue"))
                 elif kind == "proc":
@@ -8713,6 +8950,7 @@ class App(tk.Tk):
             "insecure": bool(self.insecure_var.get()),
             "threads": clamp_threads(self.threads_var.get()),
             "direct_threads": clamp_threads(self.direct_threads_var.get()),
+            "concurrent": clamp_concurrent(self.concurrent_var.get()),
             "theme": self.theme_name,
             "language": current_language(),
             "remember_geometry": remember,
