@@ -7579,17 +7579,22 @@ class App(tk.Tk):
         ttk.Button(cookies_row, text=_("browse"), command=browse_cookies).pack(side="left", padx=(8, 0))
         ttk.Button(cookies_row, text=_("remove"), command=lambda: self.cookies_var.set("")).pack(side="left", padx=(6, 0))
 
-        # Advanced
+        # Advanced — filename comes from the template in General, not a fixed name here.
         advanced = section(_("advanced"))
-        for label, var in (("Referer", self.referer_var), ("Имя файла", self.name_var)):
-            row = tk.Frame(advanced, bg=t["card"])
-            row.pack(fill="x", pady=(0, 8))
-            tk.Label(row, text=label, bg=t["card"], fg=t["muted"], font=("Segoe UI", 9), width=12, anchor="w").pack(
-                side="left"
-            )
-            ttk.Entry(row, textvariable=var).pack(side="left", fill="x", expand=True)
+        referer_row = tk.Frame(advanced, bg=t["card"])
+        referer_row.pack(fill="x", pady=(0, 8))
+        tk.Label(
+            referer_row,
+            text=_("referer"),
+            bg=t["card"],
+            fg=t["muted"],
+            font=("Segoe UI", 9),
+            width=12,
+            anchor="w",
+        ).pack(side="left")
+        ttk.Entry(referer_row, textvariable=self.referer_var).pack(side="left", fill="x", expand=True)
 
-        tk.Label(advanced, text="Доп. заголовки", bg=t["card"], fg=t["muted"], font=("Segoe UI", 9), anchor="w").pack(
+        tk.Label(advanced, text=_("extra_headers"), bg=t["card"], fg=t["muted"], font=("Segoe UI", 9), anchor="w").pack(
             fill="x"
         )
         extra = ScrolledText(
