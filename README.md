@@ -30,7 +30,28 @@ python hls_downloader.py
 
 On first use the app can download `yt-dlp` into `bin/` automatically. `ffmpeg` must be present in `bin/` (or on `PATH`).
 
-### Arch Linux (from source)
+### Arch Linux / CachyOS
+
+Prefer the **Arch** CI artifact (built in `archlinux` container, works on CachyOS):
+
+1. Download `HLS-Downloader-archlinux.zip` from [Actions](https://github.com/MaksBaks92/hls-downloader/actions) or Releases
+2. Unpack and run:
+
+```bash
+chmod +x "HLS Downloader" install-desktop.sh
+./install-desktop.sh   # optional app menu entry
+./"HLS Downloader"
+```
+
+Or build a package locally with `makepkg`:
+
+```bash
+cd packaging/arch
+makepkg -si
+hls-downloader
+```
+
+From source:
 
 ```bash
 sudo pacman -S --needed python python-pip tk ffmpeg
@@ -66,7 +87,7 @@ chmod +x "HLS Downloader" install-desktop.sh
 ./"HLS Downloader"
 ```
 
-Works on Arch and other glibc x86_64 distros (artifact is built on Ubuntu).
+The generic `HLS-Downloader-linux.zip` is built on Ubuntu. For Arch / CachyOS use `HLS-Downloader-archlinux.zip`.
 
 ## Settings
 

@@ -1,0 +1,63 @@
+# Maintainer: MaksBaks92
+# Build on Arch / CachyOS: makepkg -si
+pkgname=hls-downloader
+pkgver=1.0.7
+pkgrel=1
+pkgdesc="Desktop HLS/page video downloader (Windows + Linux)"
+arch=('x86_64')
+url="https://github.com/MaksBaks92/hls-downloader"
+license=('MIT')
+depends=('python' 'tk' 'ffmpeg')
+makedepends=('python-pip' 'python-virtualenv' 'git')
+options=('!strip')
+source=("$pkgname::git+https://github.com/MaksBaks92/hls-downloader.git#branch=main")
+sha256sums=('SKIP')
+
+prepare() {
+  cd "$srcdir/$pkgname"
+  python -m venv .venv
+  # shellcheck disable=SC1091
+  source .venv/bin/activate
+  pip install --upgrade pip
+  pip install -r requirements.txt
+}
+
+build() {
+  cd "$srcdir/$pkgname"
+  # shellcheck disable=SC1091
+  source .venv/bin/activate
+  mkdir -p bin
+  curl -fsSL "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp" -o bin/yt-dlp
+  chmod +x bin/yt-dlp
+  ln -sf "$(command -v ffmpeg)" bin/ffmpeg
+  pyinstaller --noconfirm hls_downloader.spec
+  DEST="dist/HLS Downloader"
+  cp -f app.png "$DEST/app.png"
+  cp -f packaging/linux/install-desktop.sh "$DEST/install-desktop.sh"
+  cp -f packaging/linux/hls-downloader.desktop "$DEST/hls-downloader.desktop"
+  chmod +x "$DEST/HLS Downloader" "$DEST/install-desktop.sh"
+}
+
+package() {
+  cd "$srcdir/$pkgname"
+  install -d "$pkgdir/opt/$pkgname"
+  cp -a "dist/HLS Downloader/." "$pkgdir/opt/$pkgname/"
+
+  install -d "$pkgdir/usr/bin"
+  cat >"$pkgdir/usr/bin/hls-downloader" <<'EOF'
+#!/bin/sh
+exec "/opt/hls-downloader/HLS Downloader" "$@"
+EOF
+  chmod 755 "$pkgdir/usr/bin/hls-downloader"
+
+  install -Dm644 packaging/linux/hls-downloader.desktop \
+    "$pkgdir/usr/share/applications/hls-downloader.desktop"
+  sed -i 's|^Exec=.*|Exec=hls-downloader|' \
+    "$pkgdir/usr/share/applications/hls-downloader.desktop"
+  sed -i 's|^Icon=.*|Icon=hls-downloader|' \
+    "$pkgdir/usr/share/applications/hls-downloader.desktop"
+
+  if [[ -f app.png ]]; then
+    install -Dm644 app.png "$pkgdir/usr/share/icons/hicolor/256x256/apps/hls-downloader.png"
+  fi
+}
