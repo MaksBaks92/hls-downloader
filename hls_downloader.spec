@@ -9,6 +9,8 @@ yt_name = "yt-dlp.exe" if is_windows else "yt-dlp"
 ff_name = "ffmpeg.exe" if is_windows else "ffmpeg"
 
 datas = [("app.ico", ".")]
+if (root / "app.png").exists():
+    datas.append(("app.png", "."))
 binaries = []
 for name in (ff_name, yt_name):
     candidate = root / "bin" / name
