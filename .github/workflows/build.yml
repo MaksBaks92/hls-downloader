@@ -65,12 +65,13 @@ jobs:
       - name: Install system packages
         run: |
           sudo apt-get update
+          # Ubuntu 24.04 (noble): libasound2 -> libasound2t64
           sudo apt-get install -y \
             python3-tk \
-            libgtk-3-0 \
+            libgtk-3-0t64 \
             libxcb-xinerama0 \
             libxkbcommon-x11-0 \
-            libasound2 \
+            libasound2t64 \
             libpulse0
 
       - name: Install Python deps
