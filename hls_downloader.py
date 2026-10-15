@@ -2395,10 +2395,50 @@ def open_path(target: str | Path) -> None:
     try:
         if IS_WINDOWS:
             os.startfile(path)  # type: ignore[attr-defined]
-        elif IS_MAC:
-            subprocess.Popen(["open", path], creationflags=CREATE_NO_WINDOW)
-        else:
-            subprocess.Popen(["xdg-open", path], creationflags=CREATE_NO_WINDOW)
+            return
+        if IS_MAC:
+            subprocess.Popen(
+                ["open", path],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                stdin=subprocess.DEVNULL,
+                env=tool_env(),
+                start_new_session=True,
+                creationflags=CREATE_NO_WINDOW,
+            )
+            return
+
+        # AppImage/PyInstaller LD_LIBRARY_PATH breaks host xdg-open / browsers /
+        # file managers — always spawn with a cleaned env.
+        env = tool_env()
+        commands: list[list[str]] = []
+        if shutil.which("xdg-open"):
+            commands.append(["xdg-open", path])
+        if shutil.which("gio"):
+            commands.append(["gio", "open", path])
+        for name in ("kde-open5", "kde-open", "exo-open", "gnome-open"):
+            if shutil.which(name):
+                commands.append([name, path])
+        if not commands:
+            raise OSError("Не найден xdg-open (пакет xdg-utils)")
+
+        last_error: OSError | None = None
+        for cmd in commands:
+            try:
+                subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    stdin=subprocess.DEVNULL,
+                    env=env,
+                    start_new_session=True,
+                    creationflags=CREATE_NO_WINDOW,
+                )
+                return
+            except OSError as exc:
+                last_error = exc
+        if last_error is not None:
+            raise last_error
     except OSError as exc:
         raise PlaylistError(f"Не удалось открыть: {path}\n{exc}") from exc
 
@@ -6719,12 +6759,18 @@ class DownloadCard(tk.Frame):
 
     def _open_url(self) -> None:
         if self.url.startswith(("http://", "https://")):
-            open_path(self.url)
+            try:
+                open_path(self.url)
+            except PlaylistError as exc:
+                messagebox.showerror(_("error_download"), str(exc), parent=self.app)
 
     def _open_file(self) -> None:
         path = self.output or self.app.last_output
         if path and Path(path).exists():
-            open_path(path)
+            try:
+                open_path(path)
+            except PlaylistError as exc:
+                messagebox.showerror(_("error_download"), str(exc), parent=self.app)
 
     def _open_folder(self) -> None:
         path = self.output or self.app.last_output or self.app.dir_var.get().strip()
@@ -6732,7 +6778,12 @@ class DownloadCard(tk.Frame):
         if folder.is_file():
             folder = folder.parent
         if folder.exists():
-            open_path(folder)
+            try:
+                open_path(folder)
+            except PlaylistError as exc:
+                messagebox.showerror(_("error_download"), str(exc), parent=self.app)
+        else:
+            messagebox.showwarning(_("error_download"), f"Папка не найдена:\n{folder}", parent=self.app)
 
     def _show_info(self) -> None:
         quality = self.selected_quality().get("label", "")
