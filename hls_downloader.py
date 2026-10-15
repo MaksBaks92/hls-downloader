@@ -9089,13 +9089,14 @@ def main() -> None:
     if "--test" in sys.argv:
         _self_test()
         return
-    try:
-        from ctypes import windll
+    if IS_WINDOWS:
+        try:
+            from ctypes import windll
 
-        windll.shcore.SetProcessDpiAwareness(1)
-        windll.shell32.SetCurrentProcessExplicitAppUserModelID("hls.downloader")
-    except (AttributeError, OSError):
-        pass
+            windll.shcore.SetProcessDpiAwareness(1)
+            windll.shell32.SetCurrentProcessExplicitAppUserModelID("hls.downloader")
+        except (AttributeError, OSError, ImportError):
+            pass
     app = App()
     app.mainloop()
 
