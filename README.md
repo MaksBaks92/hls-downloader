@@ -77,7 +77,14 @@ Output: `dist/HLS Downloader/`
 
 GitHub Actions builds Windows and Linux artifacts on every push to `main` and on tags.
 
-### Linux release zip
+### Linux release zip / AppImage
+
+**AppImage** (recommended on CachyOS / Arch / most distros):
+
+```bash
+chmod +x HLS-Downloader-x86_64.AppImage
+./HLS-Downloader-x86_64.AppImage
+```
 
 After unpacking `HLS-Downloader-linux.zip`:
 
@@ -87,7 +94,7 @@ chmod +x "HLS Downloader" install-desktop.sh
 ./"HLS Downloader"
 ```
 
-The generic `HLS-Downloader-linux.zip` is built on Ubuntu. For Arch / CachyOS use `HLS-Downloader-archlinux.zip`.
+The generic `HLS-Downloader-linux.zip` and AppImage are built on Ubuntu. For a native Arch tree use `HLS-Downloader-archlinux.zip`.
 
 ## Settings
 
