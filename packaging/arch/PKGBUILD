@@ -1,7 +1,7 @@
 # Maintainer: MaksBaks92
 # Build on Arch / CachyOS: makepkg -si
 pkgname=hls-downloader
-pkgver=1.0.9
+pkgver=1.0.10
 pkgrel=1
 pkgdesc="Desktop HLS/page video downloader (Windows + Linux)"
 arch=('x86_64')
@@ -27,7 +27,7 @@ build() {
   # shellcheck disable=SC1091
   source .venv/bin/activate
   mkdir -p bin
-  curl -fsSL "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp" -o bin/yt-dlp
+  curl -fsSL "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux" -o bin/yt-dlp
   chmod +x bin/yt-dlp
   ln -sf "$(command -v ffmpeg)" bin/ffmpeg
   pyinstaller --noconfirm hls_downloader.spec

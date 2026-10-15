@@ -39,7 +39,14 @@ ARIA2_BIN = "aria2c.exe" if IS_WINDOWS else "aria2c"
 def runtime_dir() -> Path:
     """Writable folder next to the .exe (or the script)."""
     if getattr(sys, "frozen", False):
-        return Path(sys.executable).resolve().parent
+        exe_dir = Path(sys.executable).resolve().parent
+        # AppImage / read-only mounts cannot store settings next to the binary.
+        if os.environ.get("APPIMAGE") or os.environ.get("APPDIR") or not os.access(exe_dir, os.W_OK):
+            base = Path(os.environ.get("XDG_CONFIG_HOME") or (Path.home() / ".config"))
+            path = base / "hls-downloader"
+            path.mkdir(parents=True, exist_ok=True)
+            return path
+        return exe_dir
     return Path(__file__).resolve().parent
 
 
@@ -501,8 +508,22 @@ def requests_proxies(proxy: str) -> dict[str, str] | None:
     return {"http": proxy, "https": proxy, "all": proxy}
 
 
-def proxy_env(proxy: str) -> dict[str, str]:
+def tool_env(proxy: str = "") -> dict[str, str]:
+    """Env for ffmpeg/yt-dlp children.
+
+    PyInstaller/AppImage sets LD_LIBRARY_PATH to bundled libs; that breaks the
+    system Python zipapp form of yt-dlp (ssl import fails). Child tools need a
+    clean library path — bundled ffmpeg/yt-dlp_linux are self-contained enough.
+    """
     env = os.environ.copy()
+    if getattr(sys, "frozen", False) or env.get("APPIMAGE") or env.get("APPDIR"):
+        for key in (
+            "LD_LIBRARY_PATH",
+            "LD_PRELOAD",
+            "DYLD_LIBRARY_PATH",
+            "DYLD_FALLBACK_LIBRARY_PATH",
+        ):
+            env.pop(key, None)
     if not proxy:
         return env
     for key in (
@@ -517,6 +538,10 @@ def proxy_env(proxy: str) -> dict[str, str]:
     ):
         env[key] = proxy
     return env
+
+
+def proxy_env(proxy: str) -> dict[str, str]:
+    return tool_env(proxy)
 
 
 def current_proxy() -> str:
@@ -1459,6 +1484,7 @@ def remux_recording_to_mp4(src: Path, dst: Path, events: queue.Queue | None = No
         encoding="utf-8",
         errors="replace",
         creationflags=CREATE_NO_WINDOW,
+        env=tool_env(current_proxy()),
     )
     if process.returncode == 0 and temp.exists() and temp.stat().st_size > 1024:
         if dst.exists():
@@ -1510,6 +1536,7 @@ def ytdlp_get_stream_urls(
         errors="replace",
         creationflags=CREATE_NO_WINDOW,
         timeout=90,
+        env=tool_env(proxy.strip() or current_proxy()),
     )
     if process.returncode != 0:
         detail = (process.stderr or process.stdout or "").strip()
@@ -2162,8 +2189,9 @@ def pick_best_direct(urls: list[str]) -> str:
 
 
 def find_yt_dlp() -> Path | None:
-    if YTDLP_PATH.exists():
-        return YTDLP_PATH
+    for candidate in (YTDLP_PATH, APP_DIR / "bin" / YTDLP_BIN):
+        if candidate.exists():
+            return candidate
     found = shutil.which("yt-dlp")
     return Path(found) if found else None
 
@@ -2172,19 +2200,29 @@ def ensure_yt_dlp(events: queue.Queue | None = None) -> Path:
     existing = find_yt_dlp()
     if existing is not None:
         return existing
-    YTDLP_PATH.parent.mkdir(parents=True, exist_ok=True)
+    # AppImage / frozen _MEIPASS is often read-only — download into writable APP_DIR/bin.
+    target = YTDLP_PATH
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if not os.access(target.parent, os.W_OK):
+            raise OSError("bin not writable")
+    except OSError:
+        target = APP_DIR / "bin" / YTDLP_BIN
+        target.parent.mkdir(parents=True, exist_ok=True)
     if events is not None:
         events.put(("status", "Скачиваю yt-dlp…"))
         events.put(("log", "Нужен yt-dlp, чтобы разбирать страницы сайтов"))
-    asset = "yt-dlp.exe" if IS_WINDOWS else "yt-dlp"
+    # Linux: prefer standalone binary — the plain "yt-dlp" asset is a Python zipapp
+    # that breaks under PyInstaller/AppImage LD_LIBRARY_PATH.
+    asset = "yt-dlp.exe" if IS_WINDOWS else "yt-dlp_linux"
     url = f"https://github.com/yt-dlp/yt-dlp/releases/latest/download/{asset}"
     request = urllib.request.Request(url, headers={"User-Agent": DEFAULT_UA})
     with urllib.request.urlopen(request, timeout=180) as response:
         data = response.read()
-    YTDLP_PATH.write_bytes(data)
+    target.write_bytes(data)
     if not IS_WINDOWS:
-        YTDLP_PATH.chmod(YTDLP_PATH.stat().st_mode | 0o111)
-    return YTDLP_PATH
+        target.chmod(target.stat().st_mode | 0o111)
+    return target
 
 
 def open_path(target: str | Path) -> None:
@@ -2545,6 +2583,7 @@ def probe_ytdlp_playlist(url: str, events: queue.Queue | None = None) -> dict | 
             errors="replace",
             creationflags=CREATE_NO_WINDOW,
             timeout=180,
+            env=tool_env(current_proxy()),
         )
     except subprocess.TimeoutExpired:
         return None
@@ -3106,6 +3145,7 @@ def resolve_page_to_playlist(
                 errors="replace",
                 creationflags=CREATE_NO_WINDOW,
                 timeout=90,
+                env=tool_env(current_proxy()),
             )
             if probe.returncode == 0 and probe.stdout.strip():
                 info = json.loads(probe.stdout)
@@ -3279,6 +3319,7 @@ def resolve_page_to_playlist(
             encoding="utf-8",
             errors="replace",
             creationflags=CREATE_NO_WINDOW,
+            env=tool_env(current_proxy()),
             timeout=180,
         )
     except subprocess.TimeoutExpired as exc:
@@ -3544,6 +3585,7 @@ def download_direct_with_browser(
             encoding="utf-8",
             errors="replace",
             creationflags=CREATE_NO_WINDOW,
+            env=tool_env(current_proxy()),
         )
         events.put(("proc", process))
         assert process.stdout is not None
@@ -3860,6 +3902,7 @@ def download_direct_with_browser(
                 encoding="utf-8",
                 errors="replace",
                 creationflags=CREATE_NO_WINDOW,
+                env=tool_env(current_proxy()),
             )
             if process.returncode != 0:
                 raise PlaylistError((process.stderr or process.stdout or "ffmpeg error").strip()[-400:])
@@ -4445,6 +4488,7 @@ def probe_media_info(
             errors="replace",
             creationflags=CREATE_NO_WINDOW,
             timeout=120,
+            env=tool_env(current_proxy()),
         )
         if probe.returncode == 0 and probe.stdout.strip():
             info = json.loads(probe.stdout)

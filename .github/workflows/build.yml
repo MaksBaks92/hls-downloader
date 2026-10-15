@@ -82,7 +82,8 @@ jobs:
       - name: Fetch ffmpeg + yt-dlp
         run: |
           mkdir -p bin
-          curl -L "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp" -o bin/yt-dlp
+          # Standalone binary (not the Python zipapp) — required for AppImage/PyInstaller.
+          curl -L "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux" -o bin/yt-dlp
           chmod +x bin/yt-dlp
           # BtbN "latest" tag can 404 intermittently — prefer apt static binary.
           if curl -fsSL "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz" -o ffmpeg.tar.xz \
@@ -164,7 +165,7 @@ jobs:
       - name: Fetch ffmpeg + yt-dlp
         run: |
           mkdir -p bin
-          curl -fsSL "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp" -o bin/yt-dlp
+          curl -fsSL "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux" -o bin/yt-dlp
           chmod +x bin/yt-dlp
           # Prefer static BtbN build; fall back to Arch ffmpeg.
           if curl -fsSL "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz" -o ffmpeg.tar.xz \
