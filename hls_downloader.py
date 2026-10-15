@@ -548,6 +548,168 @@ def current_proxy() -> str:
     return str(getattr(_DOWNLOAD_CTX, "proxy", "") or "")
 
 
+def _prepare_tk_filedialog_colors(root: tk.Misc | None) -> None:
+    """Make classic Tk file dialogs readable under the dark clam theme.
+
+    The app sets light foreground globally; Tk's Chooser Listbox keeps a white
+    background, so folder names become invisible on Linux.
+    """
+    if root is None:
+        return
+    try:
+        root.option_add("*Foreground", "#12161c")
+        root.option_add("*Background", "#ffffff")
+        root.option_add("*Listbox.Foreground", "#12161c")
+        root.option_add("*Listbox.Background", "#ffffff")
+        root.option_add("*Listbox.selectForeground", "#ffffff")
+        root.option_add("*Listbox.selectBackground", "#0d9f90")
+        root.option_add("*Entry.Foreground", "#12161c")
+        root.option_add("*Entry.Background", "#ffffff")
+        root.option_add("*Button.Foreground", "#12161c")
+        root.option_add("*Button.Background", "#eef1f5")
+        root.option_add("*Menubutton.Foreground", "#12161c")
+        root.option_add("*Menubutton.Background", "#ffffff")
+    except tk.TclError:
+        pass
+
+
+def ask_directory(
+    parent: tk.Misc | None = None,
+    initialdir: str = "",
+    title: str = "",
+) -> str:
+    """Pick a folder; prefer native dialogs on Linux (zenity/kdialog)."""
+    initial = initialdir.strip() if initialdir else ""
+    if not initial or not Path(initial).exists():
+        initial = str(default_output_dir())
+    title = title or "Choose Directory"
+
+    if not IS_WINDOWS and not IS_MAC:
+        env = tool_env()
+        candidates: list[list[str]] = []
+        if shutil.which("zenity"):
+            candidates.append(
+                [
+                    "zenity",
+                    "--file-selection",
+                    "--directory",
+                    f"--filename={initial.rstrip('/')}/",
+                    f"--title={title}",
+                ]
+            )
+        if shutil.which("kdialog"):
+            candidates.append(["kdialog", "--getexistingdirectory", initial, "--title", title])
+        if shutil.which("yad"):
+            candidates.append(
+                [
+                    "yad",
+                    "--file",
+                    "--directory",
+                    f"--filename={initial.rstrip('/')}/",
+                    f"--title={title}",
+                ]
+            )
+        for cmd in candidates:
+            try:
+                process = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    env=env,
+                    timeout=600,
+                )
+            except (OSError, subprocess.TimeoutExpired):
+                continue
+            # 0 = OK, 1 = cancel for zenity/yad/kdialog
+            if process.returncode != 0:
+                return ""
+            path = (process.stdout or "").strip().splitlines()
+            if path and path[-1]:
+                return path[-1]
+
+    _prepare_tk_filedialog_colors(parent)
+    return filedialog.askdirectory(parent=parent, initialdir=initial, title=title) or ""
+
+
+def ask_open_filename(
+    parent: tk.Misc | None = None,
+    title: str = "",
+    filetypes: list[tuple[str, str]] | None = None,
+    initialdir: str = "",
+) -> str:
+    """Pick a file; prefer native dialogs on Linux."""
+    title = title or "Open"
+    filetypes = filetypes or [("All files", "*.*")]
+    initial = initialdir.strip() if initialdir else ""
+    if not initial or not Path(initial).exists():
+        initial = str(Path.home())
+
+    if not IS_WINDOWS and not IS_MAC:
+        env = tool_env()
+        # Map first extension pattern for zenity filters when possible.
+        patterns = []
+        for label, pattern in filetypes:
+            patterns.append(f"{label} | {pattern}")
+        if shutil.which("zenity"):
+            cmd = [
+                "zenity",
+                "--file-selection",
+                f"--filename={initial.rstrip('/')}/",
+                f"--title={title}",
+            ]
+            for filt in patterns:
+                cmd += ["--file-filter", filt]
+            try:
+                process = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    env=env,
+                    timeout=600,
+                )
+                if process.returncode != 0:
+                    return ""
+                path = (process.stdout or "").strip().splitlines()
+                if path and path[-1]:
+                    return path[-1]
+            except (OSError, subprocess.TimeoutExpired):
+                pass
+        if shutil.which("kdialog"):
+            filt = " ".join(f"{label} ({pattern})" for label, pattern in filetypes)
+            try:
+                process = subprocess.run(
+                    ["kdialog", "--getopenfilename", initial, filt, "--title", title],
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    env=env,
+                    timeout=600,
+                )
+                if process.returncode != 0:
+                    return ""
+                path = (process.stdout or "").strip().splitlines()
+                if path and path[-1]:
+                    return path[-1]
+            except (OSError, subprocess.TimeoutExpired):
+                pass
+
+    _prepare_tk_filedialog_colors(parent)
+    return (
+        filedialog.askopenfilename(
+            parent=parent,
+            title=title,
+            filetypes=filetypes,
+            initialdir=initial,
+        )
+        or ""
+    )
+
+
 class use_download_proxy:
     """Set proxy/cookies for the current worker thread (BrowserClient / ffmpeg / yt-dlp)."""
 
@@ -7948,7 +8110,7 @@ class App(tk.Tk):
         ttk.Entry(cookies_row, textvariable=self.cookies_var).pack(side="left", fill="x", expand=True, ipady=3)
 
         def browse_cookies() -> None:
-            path = filedialog.askopenfilename(
+            path = ask_open_filename(
                 parent=win,
                 title=_("cookies"),
                 filetypes=[("Cookies", "*.txt"), ("All files", "*.*")],
@@ -8264,7 +8426,11 @@ class App(tk.Tk):
 
     def browse_dir(self) -> None:
         current = self.dir_var.get().strip() or str(default_output_dir())
-        selected = filedialog.askdirectory(initialdir=current if Path(current).exists() else str(default_output_dir()))
+        selected = ask_directory(
+            parent=self,
+            initialdir=current if Path(current).exists() else str(default_output_dir()),
+            title=_("browse"),
+        )
         if selected:
             self.dir_var.set(selected)
 

@@ -32,6 +32,9 @@ On first use the app can download `yt-dlp` into `bin/` automatically. `ffmpeg` m
 
 ### Arch Linux / CachyOS
 
+Folder/file pickers use the system dialog when `zenity` or `kdialog` is installed
+(`sudo pacman -S --needed zenity`).
+
 Prefer the **Arch** CI artifact (built in `archlinux` container, works on CachyOS):
 
 1. Download `HLS-Downloader-archlinux.zip` from [Actions](https://github.com/MaksBaks92/hls-downloader/actions) or Releases
