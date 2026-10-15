@@ -25,11 +25,24 @@ source .venv/bin/activate
 pip install -r requirements.txt
 # Put ffmpeg (+ yt-dlp optional) into ./bin
 python hls_downloader.py
+# or: ./hls-downloader.sh
 ```
 
 On first use the app can download `yt-dlp` into `bin/` automatically. `ffmpeg` must be present in `bin/` (or on `PATH`).
 
+### Arch Linux (from source)
+
+```bash
+sudo pacman -S --needed python python-pip tk ffmpeg
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+./hls-downloader.sh
+```
+
 ## Build
+
+Builds run on GitHub Actions (Windows + Linux). Locally:
 
 ```bash
 # Windows (bin/ffmpeg.exe + bin/yt-dlp.exe required)
@@ -42,6 +55,18 @@ pyinstaller --noconfirm hls_downloader.spec
 Output: `dist/HLS Downloader/`
 
 GitHub Actions builds Windows and Linux artifacts on every push to `main` and on tags.
+
+### Linux release zip
+
+After unpacking `HLS-Downloader-linux.zip`:
+
+```bash
+chmod +x "HLS Downloader" install-desktop.sh
+./install-desktop.sh   # optional: add app menu entry (XDG)
+./"HLS Downloader"
+```
+
+Works on Arch and other glibc x86_64 distros (artifact is built on Ubuntu).
 
 ## Settings
 

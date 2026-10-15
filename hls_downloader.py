@@ -61,6 +61,7 @@ ARIA2_PATH = APP_DIR / "bin" / ARIA2_BIN
 FFMPEG_PATH = RESOURCE_DIR / "bin" / FFMPEG_BIN
 YTDLP_PATH = RESOURCE_DIR / "bin" / YTDLP_BIN
 ICON_PATH = RESOURCE_DIR / "app.ico"
+ICON_PNG_PATH = RESOURCE_DIR / "app.png"
 DEFAULT_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"
@@ -2260,10 +2261,32 @@ def play_alert_sound(ok: bool = True) -> None:
             import winsound
 
             winsound.MessageBeep(winsound.MB_OK if ok else winsound.MB_ICONHAND)
-        else:
-            # Terminal bell; harmless when launched as GUI.
-            sys.stdout.write("\a")
-            sys.stdout.flush()
+            return
+
+        event = "complete" if ok else "dialog-error"
+        sound_name = "complete.oga" if ok else "dialog-error.oga"
+        freedesktop = Path("/usr/share/sounds/freedesktop/stereo") / sound_name
+        candidates: list[list[str]] = []
+        if shutil.which("canberra-gtk-play"):
+            candidates.append(["canberra-gtk-play", "-i", event])
+        if shutil.which("paplay") and freedesktop.exists():
+            candidates.append(["paplay", str(freedesktop)])
+        if shutil.which("pw-play") and freedesktop.exists():
+            candidates.append(["pw-play", str(freedesktop)])
+        for cmd in candidates:
+            try:
+                subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    creationflags=CREATE_NO_WINDOW,
+                )
+                return
+            except OSError:
+                continue
+        # Terminal bell; harmless when launched as GUI.
+        sys.stdout.write("\a")
+        sys.stdout.flush()
     except Exception:
         pass
 
@@ -6523,11 +6546,19 @@ class App(tk.Tk):
         super().__init__()
         self.title("HLS Загрузчик")
         self.minsize(*MIN_WINDOW)
+        self._app_icon: tk.PhotoImage | None = None
         if ICON_PATH.exists():
             try:
                 self.iconbitmap(default=str(ICON_PATH))
             except tk.TclError:
                 pass
+        # Linux/macOS tk often ignores .ico; prefer PNG via iconphoto.
+        if ICON_PNG_PATH.exists():
+            try:
+                self._app_icon = tk.PhotoImage(file=str(ICON_PNG_PATH))
+                self.iconphoto(True, self._app_icon)
+            except tk.TclError:
+                self._app_icon = None
         self.settings = load_settings()
         lang = str(self.settings.get("language") or LANG_RU)
         set_language(lang if lang in I18N else LANG_RU)

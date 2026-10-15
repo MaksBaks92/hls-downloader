@@ -65,7 +65,13 @@ jobs:
       - name: Install system packages
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgtk-3-0 libxcb-xinerama0 libxkbcommon-x11-0
+          sudo apt-get install -y \
+            python3-tk \
+            libgtk-3-0 \
+            libxcb-xinerama0 \
+            libxkbcommon-x11-0 \
+            libasound2 \
+            libpulse0
 
       - name: Install Python deps
         run: |
@@ -96,7 +102,15 @@ jobs:
 
       - name: Pack zip
         run: |
-          (cd "dist/HLS Downloader" && zip -r "$GITHUB_WORKSPACE/HLS-Downloader-linux.zip" .)
+          DEST="dist/HLS Downloader"
+          cp -f app.png "$DEST/app.png"
+          cp -f packaging/linux/install-desktop.sh "$DEST/install-desktop.sh"
+          cp -f packaging/linux/hls-downloader.desktop "$DEST/hls-downloader.desktop"
+          chmod +x "$DEST/HLS Downloader" "$DEST/install-desktop.sh"
+          # Make Exec relative-friendly for users who edit the template.
+          sed -i 's|^Exec=.*|Exec=./HLS Downloader|' "$DEST/hls-downloader.desktop"
+          sed -i 's|^Icon=.*|Icon=./app.png|' "$DEST/hls-downloader.desktop"
+          (cd "$DEST" && zip -r "$GITHUB_WORKSPACE/HLS-Downloader-linux.zip" .)
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

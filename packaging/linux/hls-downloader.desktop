@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=HLS Downloader
+Name[ru]=HLS Загрузчик
+Comment=Download HLS / page video to MP4
+Comment[ru]=Скачивание HLS и видео со страниц в MP4
+Exec=hls-downloader
+Icon=hls-downloader
+Terminal=false
+Categories=AudioVideo;Network;Video;
+StartupNotify=true
+Keywords=HLS;m3u8;download;video;youtube;
