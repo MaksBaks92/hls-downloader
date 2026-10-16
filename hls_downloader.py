@@ -15,6 +15,7 @@ import shutil
 import ssl
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -541,6 +542,9 @@ def host_env() -> dict[str, str]:
     env = os.environ.copy()
     for key in _HOST_ENV_UNSET:
         env.pop(key, None)
+    for key in list(env):
+        if key.startswith("_MEI") or key.startswith("PyInstaller"):
+            env.pop(key, None)
     path_parts = [
         part
         for part in env.get("PATH", "").split(os.pathsep)
@@ -556,9 +560,41 @@ def host_env() -> dict[str, str]:
     return env
 
 
+def child_runtime_tmpdir() -> Path:
+    """Writable exec-friendly temp dir for nested PyInstaller (yt-dlp_linux)."""
+    candidates = [
+        APP_DIR / "temp" / "runtime",
+        Path(tempfile.gettempdir()) / "hls-downloader-runtime",
+    ]
+    home_tmp = Path.home() / ".cache" / "hls-downloader" / "runtime"
+    candidates.append(home_tmp)
+    for path in candidates:
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+            probe = path / ".write_test"
+            probe.write_bytes(b"ok")
+            probe.unlink(missing_ok=True)
+            return path
+        except OSError:
+            continue
+    return Path(tempfile.gettempdir())
+
+
 def tool_env(proxy: str = "") -> dict[str, str]:
-    """Env for ffmpeg/yt-dlp children (also strips AppImage pollution)."""
+    """Env for ffmpeg/yt-dlp children (also strips AppImage pollution).
+
+    yt-dlp_linux is itself a PyInstaller onefile app. If it inherits the parent
+    AppImage/_MEIPASS env or a bad TMPDIR, extraction of Cryptodome/*.so fails
+    with «decompression resulted in return code -1».
+    """
     env = host_env()
+    tmp = str(child_runtime_tmpdir())
+    env["TMPDIR"] = tmp
+    env["TEMP"] = tmp
+    env["TMP"] = tmp
+    # Let the child bootloader pick a fresh extract dir.
+    env.pop("_MEIPASS", None)
+    env.pop("_MEIPASS2", None)
     if not proxy:
         return env
     for key in (
@@ -2386,6 +2422,12 @@ def pick_best_direct(urls: list[str]) -> str:
 
 
 def find_yt_dlp() -> Path | None:
+    # Prefer distro yt-dlp on Linux — avoids nested PyInstaller extract crashes
+    # (Cryptodome ARC4) when the AppImage spawns bundled yt-dlp_linux.
+    if not IS_WINDOWS:
+        for candidate in (Path("/usr/bin/yt-dlp"), Path("/usr/local/bin/yt-dlp")):
+            if candidate.is_file() and os.access(candidate, os.X_OK):
+                return candidate
     for candidate in (YTDLP_PATH, APP_DIR / "bin" / YTDLP_BIN):
         if candidate.exists():
             return candidate
@@ -2577,6 +2619,8 @@ def friendly_download_error(message: str) -> str:
         return _("err_404")
     if "timed out" in lower or "timeout" in lower:
         return _("err_timeout")
+    if "cryptodome" in lower or "decompression resulted in return code" in lower or "[pyi-" in lower:
+        return _("err_ytdlp_extract")
     if "ffmpeg" in lower and ("не найден" in lower or "not found" in lower):
         return text.splitlines()[0][:200]
     first = text.splitlines()[0].strip() if text else _("error_download")
@@ -5645,6 +5689,7 @@ I18N: dict[str, dict[str, str]] = {
         "err_403": "Доступ запрещён (403). Нужны cookies / другой UA / прокси.",
         "err_404": "Ссылка не найдена (404).",
         "err_timeout": "Таймаут сети. Проверьте интернет или прокси.",
+        "err_ytdlp_extract": "Сбой yt-dlp (Cryptodome). Поставьте: sudo pacman -S yt-dlp — или обновите AppImage.",
     },
     LANG_EN: {
         "settings_sub": "Appearance, language, folder, filename template, proxy, User-Agent and cookies",
@@ -5780,6 +5825,7 @@ I18N: dict[str, dict[str, str]] = {
         "err_403": "Access denied (403). Try cookies / another UA / proxy.",
         "err_404": "Link not found (404).",
         "err_timeout": "Network timeout. Check internet or proxy.",
+        "err_ytdlp_extract": "yt-dlp extract failed (Cryptodome). Install system yt-dlp or update the AppImage.",
     },
 }
 
