@@ -508,22 +508,57 @@ def requests_proxies(proxy: str) -> dict[str, str] | None:
     return {"http": proxy, "https": proxy, "all": proxy}
 
 
-def tool_env(proxy: str = "") -> dict[str, str]:
-    """Env for ffmpeg/yt-dlp children.
+# Vars that PyInstaller / AppImage inject and that break host tools (xdg-open,
+# browsers, file managers, system Python helpers).
+_HOST_ENV_UNSET = (
+    "LD_LIBRARY_PATH",
+    "LD_PRELOAD",
+    "DYLD_LIBRARY_PATH",
+    "DYLD_FALLBACK_LIBRARY_PATH",
+    "PYTHONHOME",
+    "PYTHONPATH",
+    "PYTHONEXECUTABLE",
+    "PYTHONNOUSERSITE",
+    "TCL_LIBRARY",
+    "TK_LIBRARY",
+    "TCLLIBPATH",
+    "TKPATH",
+    "QT_PLUGIN_PATH",
+    "QT_QPA_PLATFORM_PLUGIN_PATH",
+    "QT_HOME",
+    "GST_PLUGIN_PATH",
+    "GST_PLUGIN_SYSTEM_PATH",
+    "GST_PLUGIN_SYSTEM_PATH_1_0",
+    "APPDIR",
+    "APPIMAGE",
+    "ARGV0",
+    "OWD",
+)
 
-    PyInstaller/AppImage sets LD_LIBRARY_PATH to bundled libs; that breaks the
-    system Python zipapp form of yt-dlp (ssl import fails). Child tools need a
-    clean library path — bundled ffmpeg/yt-dlp_linux are self-contained enough.
-    """
+
+def host_env() -> dict[str, str]:
+    """Clean env for launching host apps (xdg-open, browser, file manager)."""
     env = os.environ.copy()
-    if getattr(sys, "frozen", False) or env.get("APPIMAGE") or env.get("APPDIR"):
-        for key in (
-            "LD_LIBRARY_PATH",
-            "LD_PRELOAD",
-            "DYLD_LIBRARY_PATH",
-            "DYLD_FALLBACK_LIBRARY_PATH",
-        ):
-            env.pop(key, None)
+    for key in _HOST_ENV_UNSET:
+        env.pop(key, None)
+    path_parts = [
+        part
+        for part in env.get("PATH", "").split(os.pathsep)
+        if part
+        and "squashfs-root" not in part
+        and "/tmp/.mount_" not in part
+        and not part.endswith("/usr/lib/hls-downloader")
+    ]
+    for standard in ("/usr/local/bin", "/usr/bin", "/bin"):
+        if standard not in path_parts:
+            path_parts.insert(0, standard)
+    env["PATH"] = os.pathsep.join(path_parts)
+    return env
+
+
+def tool_env(proxy: str = "") -> dict[str, str]:
+    """Env for ffmpeg/yt-dlp children (also strips AppImage pollution)."""
+    env = host_env()
     if not proxy:
         return env
     for key in (
@@ -2402,43 +2437,96 @@ def open_path(target: str | Path) -> None:
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 stdin=subprocess.DEVNULL,
-                env=tool_env(),
+                env=host_env(),
                 start_new_session=True,
                 creationflags=CREATE_NO_WINDOW,
             )
             return
 
-        # AppImage/PyInstaller LD_LIBRARY_PATH breaks host xdg-open / browsers /
-        # file managers — always spawn with a cleaned env.
-        env = tool_env()
+        # AppImage injects LD_LIBRARY_PATH / PYTHONHOME / TCL_LIBRARY — host
+        # xdg-open and file managers crash unless the env is fully cleaned.
+        env = host_env()
+        is_url = path.startswith(("http://", "https://", "file://"))
+        resolved: Path | None = None
+        if not is_url:
+            resolved = Path(path).expanduser()
+            try:
+                resolved = resolved.resolve(strict=False)
+            except OSError:
+                pass
+            path = str(resolved)
+
         commands: list[list[str]] = []
-        if shutil.which("xdg-open"):
-            commands.append(["xdg-open", path])
+        # Prefer Freedesktop FileManager portal for folders/files.
+        if resolved is not None and shutil.which("dbus-send"):
+            uri = resolved.as_uri()
+            if resolved.is_dir():
+                commands.append(
+                    [
+                        "dbus-send",
+                        "--session",
+                        "--dest=org.freedesktop.FileManager1",
+                        "--type=method_call",
+                        "/org/freedesktop/FileManager1",
+                        "org.freedesktop.FileManager1.ShowFolders",
+                        f"array:string:{uri}",
+                        "string:",
+                    ]
+                )
+            else:
+                commands.append(
+                    [
+                        "dbus-send",
+                        "--session",
+                        "--dest=org.freedesktop.FileManager1",
+                        "--type=method_call",
+                        "/org/freedesktop/FileManager1",
+                        "org.freedesktop.FileManager1.ShowItems",
+                        f"array:string:{uri}",
+                        "string:",
+                    ]
+                )
+        for candidate in (
+            "/usr/bin/xdg-open",
+            "/bin/xdg-open",
+            shutil.which("xdg-open") or "",
+        ):
+            if candidate and Path(candidate).exists():
+                commands.append([candidate, path])
+                break
         if shutil.which("gio"):
             commands.append(["gio", "open", path])
         for name in ("kde-open5", "kde-open", "exo-open", "gnome-open"):
-            if shutil.which(name):
-                commands.append([name, path])
+            exe = shutil.which(name)
+            if exe:
+                commands.append([exe, path])
         if not commands:
             raise OSError("Не найден xdg-open (пакет xdg-utils)")
 
-        last_error: OSError | None = None
+        errors: list[str] = []
         for cmd in commands:
             try:
-                subprocess.Popen(
+                process = subprocess.Popen(
                     cmd,
                     stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
+                    stderr=subprocess.PIPE,
                     stdin=subprocess.DEVNULL,
                     env=env,
                     start_new_session=True,
                     creationflags=CREATE_NO_WINDOW,
                 )
-                return
+                try:
+                    _out, err = process.communicate(timeout=2.5)
+                except subprocess.TimeoutExpired:
+                    # Still running — file manager / browser likely opened.
+                    return
+                if process.returncode in (0, None):
+                    return
+                detail = (err or b"").decode("utf-8", errors="replace").strip()
+                errors.append(f"{' '.join(cmd)} → {process.returncode}" + (f": {detail}" if detail else ""))
             except OSError as exc:
-                last_error = exc
-        if last_error is not None:
-            raise last_error
+                errors.append(f"{' '.join(cmd)} → {exc}")
+        raise OSError("; ".join(errors[-3:]) or "не удалось открыть")
     except OSError as exc:
         raise PlaylistError(f"Не удалось открыть: {path}\n{exc}") from exc
 

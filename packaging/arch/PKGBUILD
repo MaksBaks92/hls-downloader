@@ -1,7 +1,7 @@
 # Maintainer: MaksBaks92
 # Build on Arch / CachyOS: makepkg -si
 pkgname=hls-downloader
-pkgver=1.0.12
+pkgver=1.0.13
 pkgrel=1
 pkgdesc="Desktop HLS/page video downloader (Windows + Linux)"
 arch=('x86_64')
