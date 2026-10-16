@@ -5444,8 +5444,10 @@ I18N: dict[str, dict[str, str]] = {
         "add": "Добавить",
         "download_all": "Скачать все",
         "queued": "В очереди…",
-        "concurrent": "Параллельно",
-        "concurrent_help": "Сколько видео качать одновременно (1–8). Остальные ждут в очереди.",
+        "concurrent": "Одновременные закачки",
+        "concurrent_help": "Сколько видео скачивать одновременно (1–8). Остальные ждут в очереди.",
+        "concurrent_short": "Одновременно",
+        "open_file": "Открыть файл",
         "card_filename": "Файл",
         "stop": "Стоп",
         "empty_title": "Очередь пуста",
@@ -5573,8 +5575,10 @@ I18N: dict[str, dict[str, str]] = {
         "add": "Add",
         "download_all": "Download all",
         "queued": "Queued…",
-        "concurrent": "Parallel",
+        "concurrent": "Concurrent downloads",
         "concurrent_help": "How many videos to download at once (1–8). The rest wait in queue.",
+        "concurrent_short": "Concurrent",
+        "open_file": "Open file",
         "card_filename": "File",
         "stop": "Stop",
         "empty_title": "Queue is empty",
@@ -6372,7 +6376,8 @@ class DownloadCard(tk.Frame):
         self.btn_close = self._icon_btn(actions, "×", self._remove, theme["danger"])
         self.btn_open_url = self._icon_btn(actions, "↗", self._open_url)
         self.btn_download = self._icon_btn(actions, "↓", self._start_download, enabled=False)
-        self.btn_folder = self._icon_btn(actions, "▣", self._open_folder)
+        # Folder glyph (not ▣ — that looked like Stop and duplicated the post-done open action).
+        self.btn_folder = self._icon_btn(actions, "📁", self._open_folder)
         self.btn_info = self._icon_btn(actions, "i", self._show_info)
         for btn in (self.btn_close, self.btn_open_url, self.btn_download, self.btn_folder, self.btn_info):
             btn.pack(pady=3, anchor="center")
@@ -6790,9 +6795,11 @@ class DownloadCard(tk.Frame):
             self.status_overlay.configure(text=self.detail)
         if data.get("output"):
             self.output = data["output"]
+            # Open-file uses ▶ — never 📂, which duplicated the folder button.
             self._set_btn_enabled(self.btn_download, True)
-            self.btn_download.configure(text="📂")
+            self.btn_download.configure(text="▶")
             self.btn_download._command = self._open_file  # type: ignore[attr-defined]
+            self._set_btn_enabled(self.btn_folder, True)
         if "percent" in data:
             self.percent = data["percent"]
         if data.get("thumbnail"):
@@ -7114,8 +7121,28 @@ class App(tk.Tk):
         saved_tpl = str(self.settings.get("filename_template") or DEFAULT_FILENAME_TEMPLATE).strip()
         self.filename_template_var = tk.StringVar(value=saved_tpl or DEFAULT_FILENAME_TEMPLATE)
         self.concurrent_var = tk.StringVar(
-            value=str(self.settings.get("concurrent") or DEFAULT_CONCURRENT)
+            value=str(clamp_concurrent(self.settings.get("concurrent") or DEFAULT_CONCURRENT))
         )
+        # Quick concurrent control next to queue actions (also in Settings → General).
+        concurrent_bar = tk.Frame(shell_inner, bg=t["header"])
+        concurrent_bar.pack(side="left", padx=(8, 0))
+        tk.Label(
+            concurrent_bar,
+            text=_("concurrent_short"),
+            bg=t["header"],
+            fg=t["muted"],
+            font=(UI_FONT, 9),
+        ).pack(side="left", padx=(0, 6))
+        self.concurrent_spin = ttk.Spinbox(
+            concurrent_bar,
+            from_=1,
+            to=MAX_CONCURRENT,
+            textvariable=self.concurrent_var,
+            width=4,
+            command=self._on_concurrent_changed,
+        )
+        self.concurrent_spin.pack(side="left")
+        self.concurrent_var.trace_add("write", lambda *_: self._on_concurrent_changed())
         self.name_var = tk.StringVar(value="video.mp4")
         self.name_var.trace_add("write", self._on_name_write)
         self.ua_var = tk.StringVar(value=self.settings.get("user_agent") or DEFAULT_UA)
@@ -7979,6 +8006,37 @@ class App(tk.Tk):
             justify="left",
         ).pack(fill="x", pady=(0, 8))
 
+        # Concurrent downloads first — how many videos at once.
+        concurrent_row = tk.Frame(general, bg=t["card"])
+        concurrent_row.pack(fill="x", pady=(0, 4))
+        tk.Label(
+            concurrent_row,
+            text=_("concurrent"),
+            bg=t["card"],
+            fg=t["muted"],
+            font=("Segoe UI", 9),
+            width=18,
+            anchor="w",
+        ).pack(side="left")
+        ttk.Spinbox(
+            concurrent_row,
+            from_=1,
+            to=MAX_CONCURRENT,
+            textvariable=self.concurrent_var,
+            width=8,
+            command=self._on_concurrent_changed,
+        ).pack(side="left")
+        tk.Label(
+            general,
+            text=_("concurrent_help"),
+            bg=t["card"],
+            fg=t["muted"],
+            font=(UI_FONT, 8),
+            anchor="w",
+            wraplength=560,
+            justify="left",
+        ).pack(fill="x", pady=(0, 10))
+
         threads_row = tk.Frame(general, bg=t["card"])
         threads_row.pack(fill="x", pady=(0, 8))
         tk.Label(threads_row, text=_("threads_hls"), bg=t["card"], fg=t["muted"], font=("Segoe UI", 9), width=12, anchor="w").pack(
@@ -8002,24 +8060,6 @@ class App(tk.Tk):
             anchor="w",
         ).pack(side="left")
         ttk.Spinbox(direct_row, from_=1, to=MAX_THREADS, textvariable=self.direct_threads_var, width=8).pack(side="left")
-        concurrent_row = tk.Frame(general, bg=t["card"])
-        concurrent_row.pack(fill="x")
-        tk.Label(
-            concurrent_row,
-            text=_("concurrent"),
-            bg=t["card"],
-            fg=t["muted"],
-            font=("Segoe UI", 9),
-            width=12,
-            anchor="w",
-        ).pack(side="left")
-        ttk.Spinbox(
-            concurrent_row,
-            from_=1,
-            to=MAX_CONCURRENT,
-            textvariable=self.concurrent_var,
-            width=8,
-        ).pack(side="left")
         tk.Label(
             general,
             text=_("threads_help"),
@@ -8030,16 +8070,6 @@ class App(tk.Tk):
             wraplength=560,
             justify="left",
         ).pack(fill="x", pady=(6, 0))
-        tk.Label(
-            general,
-            text=_("concurrent_help"),
-            bg=t["card"],
-            fg=t["muted"],
-            font=(UI_FONT, 8),
-            anchor="w",
-            wraplength=560,
-            justify="left",
-        ).pack(fill="x", pady=(2, 0))
 
         ttk.Checkbutton(
             general,
@@ -8957,6 +8987,19 @@ class App(tk.Tk):
     def _max_concurrent(self) -> int:
         return clamp_concurrent(self.concurrent_var.get())
 
+    def _on_concurrent_changed(self, *_args) -> None:
+        """Clamp UI value and continue pumping the queue when the limit rises."""
+        try:
+            raw = self.concurrent_var.get()
+        except (tk.TclError, AttributeError):
+            return
+        clamped = clamp_concurrent(raw)
+        if str(clamped) != str(raw).strip():
+            self.concurrent_var.set(str(clamped))
+            return
+        if any(c.state == "queued" for c in getattr(self, "_cards", [])):
+            self._pump_downloads()
+
     def _running_count(self) -> int:
         return sum(1 for card in self._cards if card.state == "run")
 
@@ -9212,6 +9255,16 @@ class App(tk.Tk):
                             card._show_progress()
                             card.set_progress(100, status_detail)
                             card.meta_var.set(out or status_detail)
+                            # Big button becomes Open file; side ▶ opens file, 📁 opens folder.
+                            card.download_btn.configure(
+                                text=_("open_file"),
+                                state="normal",
+                                command=card._open_file,
+                            )
+                            card._set_btn_enabled(card.btn_download, True)
+                            card.btn_download.configure(text="▶")
+                            card.btn_download._command = card._open_file  # type: ignore[attr-defined]
+                            card._set_btn_enabled(card.btn_folder, True)
                             append_download_history(
                                 {
                                     "title": card.title_var.get(),
