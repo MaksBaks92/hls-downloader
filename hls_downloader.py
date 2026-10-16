@@ -7215,26 +7215,6 @@ class App(tk.Tk):
         self.concurrent_var = tk.StringVar(
             value=str(clamp_concurrent(self.settings.get("concurrent") or DEFAULT_CONCURRENT))
         )
-        # Quick concurrent control next to queue actions (also in Settings → General).
-        concurrent_bar = tk.Frame(shell_inner, bg=t["header"])
-        concurrent_bar.pack(side="left", padx=(8, 0))
-        tk.Label(
-            concurrent_bar,
-            text=_("concurrent_short"),
-            bg=t["header"],
-            fg=t["muted"],
-            font=(UI_FONT, 9),
-        ).pack(side="left", padx=(0, 6))
-        self.concurrent_spin = ttk.Spinbox(
-            concurrent_bar,
-            from_=1,
-            to=MAX_CONCURRENT,
-            textvariable=self.concurrent_var,
-            width=4,
-            command=self._on_concurrent_changed,
-        )
-        self.concurrent_spin.pack(side="left")
-        self.concurrent_var.trace_add("write", lambda *_: self._on_concurrent_changed())
         self.name_var = tk.StringVar(value="video.mp4")
         self.name_var.trace_add("write", self._on_name_write)
         self.ua_var = tk.StringVar(value=self.settings.get("user_agent") or DEFAULT_UA)
@@ -8896,37 +8876,28 @@ class App(tk.Tk):
         if not selected:
             self.remove_card(index)
             return
-        # Remove playlist placeholder card, then add selected videos as ready cards.
+        # Remove playlist placeholder, then probe each selected video for
+        # thumbnails + quality list (flat playlist metadata is incomplete).
         self.remove_card(index)
         self.empty_wrap.pack_forget()
-        qualities = [{"label": _("best_quality"), "ytdlp_format": "bv*+ba/b", "choice_url": None}]
         for entry in selected:
             url = str(entry.get("url") or "")
             if not url:
                 continue
             card_index = len(self._cards)
             card = DownloadCard(self.cards_frame, self, card_index, url)
+            if entry.get("title"):
+                card.title_var.set(str(entry["title"]))
             card.pack(fill="x", pady=8)
             self._cards.append(card)
-            self._queue_items.append({"url": url, "state": "ready", "title": entry.get("title")})
-            # Unique browser fingerprint per playlist video.
-            fp = self._fingerprint_for_card(card, rotate=False)
-            card.apply_probe(
-                {
-                    "url": url,
-                    "title": entry.get("title") or url,
-                    "thumbnail": entry.get("thumbnail"),
-                    "referer": url,
-                    "playlist_url": f"ytdlp:{url}",
-                    "browser": False,
-                    "mode": "ytdlp",
-                    "ytdlp_url": url,
-                    "qualities": list(qualities),
-                    "user_agent": str(fp.get("user_agent") or DEFAULT_UA),
-                    "fingerprint": fp,
-                }
-            )
+            self._queue_items.append({"url": url, "state": "fetch", "title": entry.get("title")})
+            thumb = entry.get("thumbnail")
+            if isinstance(thumb, str) and thumb.startswith("http"):
+                card.thumbnail_url = thumb
+                self.request_thumbnail(card_index, thumb)
+            self._start_probe(card_index, url)
         self.status_var.set(_("playlist_added", n=len(selected)))
+        self._refresh_queue_buttons()
 
     def clear_download_history_file(self) -> None:
         try:
