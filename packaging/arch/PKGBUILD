@@ -1,16 +1,26 @@
 # Maintainer: MaksBaks92
 # Build on Arch / CachyOS: makepkg -si
+# AUR: copy this directory (or publish) then makepkg --printsrcinfo > .SRCINFO
 pkgname=hls-downloader
-pkgver=1.0.17
+pkgver=1.0.18
 pkgrel=1
 pkgdesc="Desktop HLS/page video downloader (Windows + Linux)"
 arch=('x86_64')
 url="https://github.com/MaksBaks92/hls-downloader"
 license=('MIT')
-depends=('python' 'tk' 'ffmpeg')
+depends=('python' 'tk' 'ffmpeg' 'yt-dlp' 'xdg-utils')
+optdepends=(
+  'zenity: native folder/file dialogs (GTK)'
+  'kdialog: native folder/file dialogs (KDE)'
+  'aria2: faster multi-connection downloads'
+  'libcanberra: desktop notification sounds'
+  'sound-theme-freedesktop: alert sound files'
+  'fuse2: run the official AppImage release'
+)
 makedepends=('python-pip' 'python-virtualenv' 'git')
 options=('!strip')
-source=("$pkgname::git+https://github.com/MaksBaks92/hls-downloader.git#branch=main")
+install=hls-downloader.install
+source=("$pkgname::git+https://github.com/MaksBaks92/hls-downloader.git#tag=v$pkgver")
 sha256sums=('SKIP')
 
 prepare() {
@@ -27,9 +37,10 @@ build() {
   # shellcheck disable=SC1091
   source .venv/bin/activate
   mkdir -p bin
-  curl -fsSL "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux" -o bin/yt-dlp
-  chmod +x bin/yt-dlp
-  ln -sf "$(command -v ffmpeg)" bin/ffmpeg
+  # Runtime prefers /usr/bin/{ffmpeg,yt-dlp}; keep a local ffmpeg symlink for the bundle layout.
+  ln -sfn "$(command -v ffmpeg)" bin/ffmpeg
+  # Do NOT bundle yt-dlp_linux — nested PyInstaller extract fails under some hosts;
+  # system yt-dlp is a hard depends= above.
   pyinstaller --noconfirm hls_downloader.spec
   DEST="dist/HLS Downloader"
   cp -f app.png "$DEST/app.png"

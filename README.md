@@ -32,24 +32,27 @@ On first use the app can download `yt-dlp` into `bin/` automatically. `ffmpeg` m
 
 ### Arch Linux / CachyOS
 
-Folder/file pickers use the system dialog when `zenity` or `kdialog` is installed
-(`sudo pacman -S --needed zenity`).
-
-On Arch/CachyOS, installing system `yt-dlp` is recommended — the AppImage will prefer it
-over the bundled binary (`sudo pacman -S --needed yt-dlp`).
-
-Prefer the **Arch** CI artifact (built in `archlinux` container, works on CachyOS):
-
-1. Download `HLS-Downloader-archlinux.zip` from [Actions](https://github.com/MaksBaks92/hls-downloader/actions) or Releases
-2. Unpack and run:
+Recommended packages:
 
 ```bash
-chmod +x "HLS Downloader" install-desktop.sh
-./install-desktop.sh   # optional app menu entry
-./"HLS Downloader"
+sudo pacman -S --needed ffmpeg yt-dlp xdg-utils zenity
+# optional:
+sudo pacman -S --needed aria2 libcanberra sound-theme-freedesktop
+# AppImage only:
+sudo pacman -S --needed fuse2
 ```
 
-Or build a package locally with `makepkg`:
+On Linux the app prefers **system** `/usr/bin/ffmpeg` and `/usr/bin/yt-dlp` over bundled copies (avoids nested PyInstaller/Cryptodome extract failures).
+
+Folder/file pickers use the system dialog when `zenity` or `kdialog` is installed.
+
+**Wayland:** the UI runs via XWayland (Tk). That is normal; install `zenity` for native file/folder dialogs.
+
+Settings for AppImage / read-only installs live in `~/.config/hls-downloader/`.
+
+#### Install options (best → portable)
+
+1. **makepkg / AUR-style package** (uses system `ffmpeg` + `yt-dlp`):
 
 ```bash
 cd packaging/arch
@@ -57,10 +60,28 @@ makepkg -si
 hls-downloader
 ```
 
+2. **Arch AppImage** (`HLS-Downloader-arch-x86_64.AppImage` from [Releases](https://github.com/MaksBaks92/hls-downloader/releases)) — built in an Arch container for CachyOS/Arch:
+
+```bash
+sudo pacman -S --needed fuse2   # once
+chmod +x HLS-Downloader-arch-x86_64.AppImage
+./HLS-Downloader-arch-x86_64.AppImage
+```
+
+3. **Arch zip** (`HLS-Downloader-archlinux.zip`):
+
+```bash
+chmod +x "HLS Downloader" install-desktop.sh
+./install-desktop.sh   # optional app menu entry
+./"HLS Downloader"
+```
+
+4. Generic Ubuntu AppImage (`HLS-Downloader-x86_64.AppImage`) also runs on Arch if `fuse2` is installed.
+
 From source:
 
 ```bash
-sudo pacman -S --needed python python-pip tk ffmpeg
+sudo pacman -S --needed python python-pip tk ffmpeg yt-dlp
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
@@ -69,13 +90,13 @@ pip install -r requirements.txt
 
 ## Build
 
-Builds run on GitHub Actions (Windows + Linux). Locally:
+Builds run on GitHub Actions (Windows + Linux + Arch). Locally:
 
 ```bash
 # Windows (bin/ffmpeg.exe + bin/yt-dlp.exe required)
 pyinstaller --noconfirm hls_downloader.spec
 
-# Linux (bin/ffmpeg + bin/yt-dlp required)
+# Linux (bin/ffmpeg + yt-dlp required)
 pyinstaller --noconfirm hls_downloader.spec
 ```
 
@@ -85,14 +106,19 @@ GitHub Actions builds Windows and Linux artifacts on every push to `main` and on
 
 ### Linux release zip / AppImage
 
-**AppImage** (recommended on CachyOS / Arch / most distros):
+| Artifact | Built on | Best for |
+|---|---|---|
+| `HLS-Downloader-arch-x86_64.AppImage` | Arch container | Arch / CachyOS |
+| `HLS-Downloader-archlinux.zip` | Arch container | Arch / CachyOS |
+| `HLS-Downloader-x86_64.AppImage` | Ubuntu | Most distros |
+| `HLS-Downloader-linux.zip` | Ubuntu | Generic Linux |
 
 ```bash
-chmod +x HLS-Downloader-x86_64.AppImage
-./HLS-Downloader-x86_64.AppImage
+chmod +x HLS-Downloader-arch-x86_64.AppImage   # or the Ubuntu AppImage
+./HLS-Downloader-arch-x86_64.AppImage
 ```
 
-After unpacking `HLS-Downloader-linux.zip`:
+After unpacking a zip:
 
 ```bash
 chmod +x "HLS Downloader" install-desktop.sh
@@ -100,8 +126,6 @@ chmod +x "HLS Downloader" install-desktop.sh
 ./"HLS Downloader"
 ```
 
-The generic `HLS-Downloader-linux.zip` and AppImage are built on Ubuntu. For a native Arch tree use `HLS-Downloader-archlinux.zip`.
-
 ## Settings
 
-Stored next to the executable / script as `settings.json`.
+Stored next to the executable when writable; otherwise under `~/.config/hls-downloader/` (AppImage / system package).

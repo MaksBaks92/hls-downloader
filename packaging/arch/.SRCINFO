@@ -1,0 +1,26 @@
+pkgbase = hls-downloader
+	pkgdesc = Desktop HLS/page video downloader (Windows + Linux)
+	pkgver = 1.0.18
+	pkgrel = 1
+	url = https://github.com/MaksBaks92/hls-downloader
+	arch = x86_64
+	license = MIT
+	makedepends = python-pip
+	makedepends = python-virtualenv
+	makedepends = git
+	depends = python
+	depends = tk
+	depends = ffmpeg
+	depends = yt-dlp
+	depends = xdg-utils
+	optdepends = zenity: native folder/file dialogs (GTK)
+	optdepends = kdialog: native folder/file dialogs (KDE)
+	optdepends = aria2: faster multi-connection downloads
+	optdepends = libcanberra: desktop notification sounds
+	optdepends = sound-theme-freedesktop: alert sound files
+	optdepends = fuse2: run the official AppImage release
+	options = !strip
+	source = hls-downloader::git+https://github.com/MaksBaks92/hls-downloader.git#tag=v1.0.18
+	sha256sums = SKIP
+
+pkgname = hls-downloader

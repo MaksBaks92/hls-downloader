@@ -68,6 +68,9 @@ Icon=$ICON_NAME
 Terminal=false
 Categories=AudioVideo;Network;Video;
 StartupNotify=true
+StartupWMClass=Hls-Downloader
+MimeType=application/vnd.apple.mpegurl;application/x-mpegURL;audio/mpegurl;audio/x-mpegurl;
+Keywords=HLS;m3u8;download;video;youtube;
 EOF
 chmod +x "$DESKTOP"
 

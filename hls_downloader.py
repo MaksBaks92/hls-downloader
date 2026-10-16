@@ -1459,12 +1459,30 @@ def _resolve_source(
 
 
 def find_ffmpeg() -> Path | None:
+    # Prefer distro ffmpeg on Linux — Arch/CachyOS packages stay updated and
+    # avoid shipping a static BtbN binary that may mismatch local codecs/libs.
+    if not IS_WINDOWS:
+        for candidate in (Path("/usr/bin/ffmpeg"), Path("/usr/local/bin/ffmpeg")):
+            if candidate.is_file() and os.access(candidate, os.X_OK):
+                return candidate
     if FFMPEG_PATH.exists():
         return FFMPEG_PATH
     found = shutil.which("ffmpeg")
-    if found:
-        return Path(found)
-    return None
+    return Path(found) if found else None
+
+
+def linux_dependency_hints() -> list[str]:
+    """Missing host tools with pacman-oriented install hints (Arch/CachyOS)."""
+    if IS_WINDOWS or IS_MAC:
+        return []
+    hints: list[str] = []
+    if find_ffmpeg() is None:
+        hints.append(_("hint_need_ffmpeg"))
+    if find_yt_dlp() is None:
+        hints.append(_("hint_need_ytdlp"))
+    if not any(shutil.which(name) for name in ("zenity", "kdialog", "yad")):
+        hints.append(_("hint_need_zenity"))
+    return hints
 
 
 def input_options(headers: dict[str, str], proxy: str, insecure: bool, live: bool) -> list[str]:
@@ -5690,6 +5708,10 @@ I18N: dict[str, dict[str, str]] = {
         "err_404": "Ссылка не найдена (404).",
         "err_timeout": "Таймаут сети. Проверьте интернет или прокси.",
         "err_ytdlp_extract": "Сбой yt-dlp (Cryptodome). Поставьте: sudo pacman -S yt-dlp — или обновите AppImage.",
+        "deps_title": "Нужны пакеты",
+        "hint_need_ffmpeg": "Не найден ffmpeg. Установите: sudo pacman -S ffmpeg",
+        "hint_need_ytdlp": "Не найден yt-dlp. Установите: sudo pacman -S yt-dlp",
+        "hint_need_zenity": "Для системных диалогов папок: sudo pacman -S zenity",
     },
     LANG_EN: {
         "settings_sub": "Appearance, language, folder, filename template, proxy, User-Agent and cookies",
@@ -5826,6 +5848,10 @@ I18N: dict[str, dict[str, str]] = {
         "err_404": "Link not found (404).",
         "err_timeout": "Network timeout. Check internet or proxy.",
         "err_ytdlp_extract": "yt-dlp extract failed (Cryptodome). Install system yt-dlp or update the AppImage.",
+        "deps_title": "Missing packages",
+        "hint_need_ffmpeg": "ffmpeg not found. Install: sudo pacman -S ffmpeg",
+        "hint_need_ytdlp": "yt-dlp not found. Install: sudo pacman -S yt-dlp",
+        "hint_need_zenity": "For native folder dialogs: sudo pacman -S zenity",
     },
 }
 
@@ -7033,9 +7059,14 @@ class DownloadCard(tk.Frame):
 
 class App(tk.Tk):
     def __init__(self) -> None:
-        super().__init__()
+        # className → X11 WM_CLASS / StartupWMClass=Hls-Downloader
+        super().__init__(className="Hls-Downloader")
         self.title("HLS Загрузчик")
         self.minsize(*MIN_WINDOW)
+        try:
+            self.tk.call("tk", "appname", "hls-downloader")
+        except tk.TclError:
+            pass
         self._app_icon: tk.PhotoImage | None = None
         if ICON_PATH.exists():
             try:
@@ -7079,7 +7110,16 @@ class App(tk.Tk):
         self._build()
         self._restore_geometry()
         self.after(100, self._poll)
+        self.after(400, self._warn_linux_deps)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
+
+    def _warn_linux_deps(self) -> None:
+        hints = linux_dependency_hints()
+        if not hints:
+            return
+        # Only block for missing ffmpeg — yt-dlp may auto-download; zenity is optional.
+        if find_ffmpeg() is None:
+            messagebox.showwarning(_("deps_title"), "\n".join(hints), parent=self)
 
     def _restore_geometry(self) -> None:
         if bool(self.settings.get("remember_geometry")):
