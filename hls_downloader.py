@@ -2667,6 +2667,63 @@ def is_youtube_url(url: str) -> bool:
     return host_matches(url, YOUTUBE_HOSTS)
 
 
+def is_pornhub_url(url: str) -> bool:
+    return host_matches(
+        url,
+        (
+            "pornhub.com",
+            "pornhub.org",
+            "pornhub.net",
+            "pornhubpremium.com",
+        ),
+    )
+
+
+def is_pornhub_list_url(url: str) -> bool:
+    """Profile / channel / search / playlist pages with many videos (not a single watch URL)."""
+    if not is_pornhub_url(url):
+        return False
+    parts = urllib.parse.urlsplit(url)
+    path = parts.path.lower()
+    # Single video watch / embed pages.
+    if "view_video.php" in path or "/embed/" in path or "/photo/" in path:
+        return False
+    if re.search(r"/video/show\b", path):
+        return False
+    list_tokens = (
+        "/pornstar/",
+        "/model/",
+        "/channels/",
+        "/channel/",
+        "/users/",
+        "/user/",
+        "/playlist/",
+        "/video/search",
+        "/categories/",
+        "/album/",
+        "/albums/",
+    )
+    if any(token in path for token in list_tokens):
+        return True
+    if path.rstrip("/").endswith("/videos") or "/videos/" in path:
+        return True
+    return False
+
+
+def is_video_list_url(url: str) -> bool:
+    """Any multi-video page that should open the checkbox picker."""
+    return is_youtube_playlist_url(url) or is_pornhub_list_url(url)
+
+
+def pornhub_watch_url(video_id: str, base_url: str = "") -> str:
+    host = "www.pornhub.com"
+    if base_url and is_pornhub_url(base_url):
+        netloc = urllib.parse.urlsplit(base_url).netloc.strip()
+        if netloc:
+            host = netloc
+    return f"https://{host}/view_video.php?viewkey={urllib.parse.quote(str(video_id))}"
+
+
 def is_vk_url(url: str) -> bool:
     return host_matches(url, ("vk.com", "vk.ru", "vkvideo.ru", "m.vk.com"))
 
@@ -2796,37 +2853,47 @@ def verify_mp4_file(path: Path, expected_size: int | None = None) -> str | None:
     return None
 
 
-def ytdlp_entry_url(entry: dict) -> str | None:
+def ytdlp_entry_url(entry: dict, base_url: str = "") -> str | None:
     if not isinstance(entry, dict):
         return None
-    for key in ("url", "webpage_url", "original_url"):
+    for key in ("webpage_url", "original_url", "url"):
         value = entry.get(key)
         if isinstance(value, str) and value.startswith("http"):
+            # Flat Pornhub lists sometimes put a non-watch URL in "url".
+            if is_pornhub_url(value) and "view_video.php" not in value.lower():
+                video_id = entry.get("id")
+                if isinstance(video_id, str) and video_id and "/" not in video_id:
+                    return pornhub_watch_url(video_id, value or base_url)
             return value
     video_id = entry.get("id")
     ie = str(entry.get("ie_key") or entry.get("extractor_key") or "").lower()
-    if isinstance(video_id, str) and video_id and ("youtube" in ie or len(video_id) == 11):
-        return youtube_watch_url(video_id)
+    if isinstance(video_id, str) and video_id:
+        if "pornhub" in ie or (base_url and is_pornhub_url(base_url)):
+            if "/" not in video_id:
+                return pornhub_watch_url(video_id, base_url)
+        if "youtube" in ie or len(video_id) == 11:
+            return youtube_watch_url(video_id)
     return None
 
 
-def flatten_ytdlp_entries(info: dict) -> list[dict]:
+def flatten_ytdlp_entries(info: dict, base_url: str = "") -> list[dict]:
     """Normalize yt-dlp playlist/channel JSON into selectable video rows."""
     entries = info.get("entries")
     if not isinstance(entries, list):
         return []
+    page_url = base_url or str(info.get("webpage_url") or info.get("original_url") or "")
     rows: list[dict] = []
     for item in entries:
         if not isinstance(item, dict):
             continue
         # Nested playlists / unavailable
         if item.get("entries") and not item.get("id"):
-            rows.extend(flatten_ytdlp_entries(item))
+            rows.extend(flatten_ytdlp_entries(item, page_url))
             continue
         if item.get("_type") == "playlist":
-            rows.extend(flatten_ytdlp_entries(item))
+            rows.extend(flatten_ytdlp_entries(item, page_url))
             continue
-        url = ytdlp_entry_url(item)
+        url = ytdlp_entry_url(item, page_url)
         if not url:
             continue
         title = item.get("title") or item.get("id") or url
@@ -2853,17 +2920,20 @@ def flatten_ytdlp_entries(info: dict) -> list[dict]:
 
 
 def probe_ytdlp_playlist(url: str, events: queue.Queue | None = None) -> dict | None:
-    """Return playlist probe dict or None if this is a single video."""
+    """Return playlist / profile probe dict or None if this is a single video."""
     ytdlp = ensure_yt_dlp(events)
     command = [
         str(ytdlp),
         "--yes-playlist",
         "--flat-playlist",
+        "--ignore-no-formats-error",
         "--no-warnings",
         "-J",
         url,
     ]
     command = append_ytdlp_cookies(command)
+    # Pornhub profiles can be large / slow (age-gate + many pages).
+    timeout = 420 if is_pornhub_list_url(url) else 180
     try:
         process = subprocess.run(
             command,
@@ -2872,29 +2942,37 @@ def probe_ytdlp_playlist(url: str, events: queue.Queue | None = None) -> dict | 
             encoding="utf-8",
             errors="replace",
             creationflags=CREATE_NO_WINDOW,
-            timeout=180,
+            timeout=timeout,
             env=tool_env(current_proxy()),
         )
     except subprocess.TimeoutExpired:
         return None
-    if process.returncode != 0 or not process.stdout.strip():
+    if not process.stdout.strip():
         return None
     try:
         info = json.loads(process.stdout)
     except json.JSONDecodeError:
         return None
-    entries = flatten_ytdlp_entries(info)
+    entries = flatten_ytdlp_entries(info, url)
     # Single video flat JSON still has no entries / one entry matching itself
     if len(entries) <= 1 and not (info.get("_type") == "playlist" and len(entries) >= 1):
-        if info.get("_type") != "playlist" and not is_youtube_playlist_url(url):
+        if info.get("_type") != "playlist" and not is_video_list_url(url):
             return None
         if len(entries) <= 1 and info.get("_type") != "playlist":
             return None
     if not entries:
+        # Explicit list/profile URLs should not fall through to single-video parsing.
+        if is_video_list_url(url):
+            detail = (process.stderr or "").strip().splitlines()
+            raise PlaylistError(detail[-1] if detail else _("playlist_empty"))
         return None
+    title = info.get("title") or info.get("id") or _("playlist")
+    if isinstance(title, str) and "/" in title and is_pornhub_list_url(url):
+        # yt-dlp often returns id-like "pornstar/name/videos" — prettify.
+        title = title.strip("/").replace("/", " · ")
     return {
         "url": url,
-        "title": info.get("title") or _("playlist"),
+        "title": title,
         "thumbnail": pick_ytdlp_thumbnail(info),
         "referer": url,
         "playlist_url": f"ytdlp:{url}",
@@ -4734,11 +4812,17 @@ def probe_media_info(
     if events is not None:
         events.put(("status", "Получение метаданных…"))
 
-    # YouTube playlist / channel / watch+list → picker instead of single video.
-    if prefers_ytdlp_download(page_url) and is_youtube_playlist_url(page_url):
+    # YouTube playlist/channel or Pornhub profile/list → checkbox picker.
+    if prefers_ytdlp_download(page_url) and is_video_list_url(page_url):
+        if is_pornhub_list_url(page_url):
+            status = _("playlist_scan_pornhub")
+            log = _("playlist_log_pornhub")
+        else:
+            status = _("playlist_scan_youtube")
+            log = _("playlist_log_youtube")
         if events is not None:
-            events.put(("status", "Читаю плейлист YouTube…"))
-            events.put(("log", "Обнаружен плейлист / канал YouTube"))
+            events.put(("status", status))
+            events.put(("log", log))
         playlist = probe_ytdlp_playlist(page_url, events)
         if playlist and playlist.get("entries"):
             # Prefer selecting the current watch video when URL has v=.
@@ -5451,7 +5535,11 @@ I18N: dict[str, dict[str, str]] = {
         "card_filename": "Файл",
         "stop": "Стоп",
         "empty_title": "Очередь пуста",
-        "empty_hint": "YouTube · VK · Rutube · Chaturbate · HLS\nВставьте ссылку сверху и нажмите Добавить",
+        "empty_hint": "YouTube · Pornhub · VK · Rutube · Chaturbate · HLS\nВставьте ссылку сверху и нажмите Добавить",
+        "playlist_scan_youtube": "Читаю плейлист YouTube…",
+        "playlist_log_youtube": "Обнаружен плейлист / канал YouTube",
+        "playlist_scan_pornhub": "Читаю список видео Pornhub…",
+        "playlist_log_pornhub": "Обнаружен профиль / список Pornhub — выберите видео",
         "ready": "Готово",
         "queue": "Очередь",
         "queue_count": "В очереди: {n}",
@@ -5582,7 +5670,11 @@ I18N: dict[str, dict[str, str]] = {
         "card_filename": "File",
         "stop": "Stop",
         "empty_title": "Queue is empty",
-        "empty_hint": "YouTube · VK · Rutube · Chaturbate · HLS\nPaste a link above and click Add",
+        "empty_hint": "YouTube · Pornhub · VK · Rutube · Chaturbate · HLS\nPaste a link above and click Add",
+        "playlist_scan_youtube": "Reading YouTube playlist…",
+        "playlist_log_youtube": "YouTube playlist / channel detected",
+        "playlist_scan_pornhub": "Reading Pornhub video list…",
+        "playlist_log_pornhub": "Pornhub profile / list detected — pick videos",
         "ready": "Ready",
         "queue": "Queue",
         "queue_count": "In queue: {n}",
@@ -6063,7 +6155,7 @@ class AudioTrackPickerDialog(tk.Toplevel):
 
 
 class PlaylistPickerDialog(tk.Toplevel):
-    """Choose which YouTube playlist videos to add for download."""
+    """Choose which playlist / profile videos to add for download."""
 
     def __init__(self, master: "App", playlist: dict) -> None:
         super().__init__(master)
