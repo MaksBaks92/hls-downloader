@@ -18,8 +18,11 @@ for name in (ff_name, yt_name):
         binaries.append((str(candidate), "bin"))
 
 hiddenimports = []
-for pkg in ("curl_cffi", "PIL", "cryptography"):
-    collected = collect_all(pkg)
+for pkg in ("curl_cffi", "PIL", "cryptography", "pystray"):
+    try:
+        collected = collect_all(pkg)
+    except Exception:
+        continue
     datas += collected[0]
     binaries += collected[1]
     hiddenimports += collected[2]

@@ -1,6 +1,6 @@
 pkgbase = hls-downloader
 	pkgdesc = Desktop HLS/page video downloader (Windows + Linux)
-	pkgver = 1.0.18
+	pkgver = 1.0.19
 	pkgrel = 1
 	url = https://github.com/MaksBaks92/hls-downloader
 	arch = x86_64
@@ -20,7 +20,7 @@ pkgbase = hls-downloader
 	optdepends = sound-theme-freedesktop: alert sound files
 	optdepends = fuse2: run the official AppImage release
 	options = !strip
-	source = hls-downloader::git+https://github.com/MaksBaks92/hls-downloader.git#tag=v1.0.18
+	source = hls-downloader::git+https://github.com/MaksBaks92/hls-downloader.git#tag=v1.0.19
 	sha256sums = SKIP
 
 pkgname = hls-downloader

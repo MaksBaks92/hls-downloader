@@ -7,9 +7,16 @@ Supports YouTube, VK, Rutube, Chaturbate, Pornhub, Eporner, Mixdrop/mxcontent pr
 ## Features
 
 - Queue with per-item quality / audio selection
+- Batch URL paste, duplicate skip, pause/resume queue, scheduled resume (`HH:MM`)
+- Container (MP4/MKV/WebM), audio-only, subtitles, metadata/thumbnail embed
+- Trim range, rate limit, SponsorBlock (YouTube), cookies from browser
+- Site presets (YouTube / Pornhub / live / audio)
+- Post-actions: open file/folder, system notification; optional minimize-to-tray
+- Export/import settings and queue; update yt-dlp from Settings
 - Separate thread settings for HLS and progressive MP4
 - Proxy (HTTP/HTTPS/SOCKS5), cookies.txt, UA presets
 - Auto-fill URL from clipboard, toast + sound on finish
+- Hotkeys: Ctrl+Enter (download all), Ctrl+Shift+V (batch), Ctrl+P (pause), Ctrl+, (settings)
 - Retry failed items and re-download from history
 - Themes: dark / light
 

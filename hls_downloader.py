@@ -32,9 +32,85 @@ from tkinter.scrolledtext import ScrolledText
 
 IS_WINDOWS = sys.platform.startswith("win")
 IS_MAC = sys.platform == "darwin"
+APP_VERSION = "1.0.19"
 YTDLP_BIN = "yt-dlp.exe" if IS_WINDOWS else "yt-dlp"
 FFMPEG_BIN = "ffmpeg.exe" if IS_WINDOWS else "ffmpeg"
 ARIA2_BIN = "aria2c.exe" if IS_WINDOWS else "aria2c"
+
+# Output containers for yt-dlp --merge-output-format / remux.
+MERGE_FORMATS = ("mp4", "mkv", "webm")
+AUDIO_FORMATS = ("m4a", "mp3", "opus", "flac")
+BROWSER_COOKIE_CHOICES = ("", "chrome", "firefox", "edge", "brave", "chromium", "opera")
+
+# One-click presets for Settings → site profile.
+SITE_PROFILES: dict[str, dict] = {
+    "default": {
+        "concurrent": 2,
+        "threads": 24,
+        "direct_threads": 12,
+        "merge_format": "mp4",
+        "audio_only": False,
+        "write_subs": False,
+        "embed_subs": False,
+        "embed_metadata": True,
+        "embed_thumbnail": False,
+        "sponsorblock": False,
+        "rate_limit": "",
+    },
+    "youtube": {
+        "concurrent": 2,
+        "threads": 16,
+        "direct_threads": 8,
+        "merge_format": "mp4",
+        "audio_only": False,
+        "write_subs": True,
+        "embed_subs": True,
+        "embed_metadata": True,
+        "embed_thumbnail": True,
+        "sponsorblock": True,
+        "rate_limit": "",
+    },
+    "pornhub": {
+        "concurrent": 3,
+        "threads": 20,
+        "direct_threads": 12,
+        "merge_format": "mp4",
+        "audio_only": False,
+        "write_subs": False,
+        "embed_subs": False,
+        "embed_metadata": False,
+        "embed_thumbnail": False,
+        "sponsorblock": False,
+        "rate_limit": "",
+    },
+    "live": {
+        "concurrent": 1,
+        "threads": 8,
+        "direct_threads": 4,
+        "merge_format": "mp4",
+        "audio_only": False,
+        "write_subs": False,
+        "embed_subs": False,
+        "embed_metadata": False,
+        "embed_thumbnail": False,
+        "sponsorblock": False,
+        "rate_limit": "",
+    },
+    "audio": {
+        "concurrent": 3,
+        "threads": 12,
+        "direct_threads": 8,
+        "merge_format": "mp4",
+        "audio_only": True,
+        "audio_format": "m4a",
+        "write_subs": False,
+        "embed_subs": False,
+        "embed_metadata": True,
+        "embed_thumbnail": True,
+        "sponsorblock": False,
+        "rate_limit": "",
+    },
+}
 
 
 def runtime_dir() -> Path:
@@ -421,6 +497,14 @@ def apply_filename_template(
     return f"{stem}.{ext}"
 
 
+def output_extension_from_params(params: dict) -> str:
+    if params.get("audio_only"):
+        ext = str(params.get("audio_format") or "m4a").strip().lower().lstrip(".")
+        return ext if ext in AUDIO_FORMATS else "m4a"
+    ext = str(params.get("merge_format") or "mp4").strip().lower().lstrip(".")
+    return ext if ext in MERGE_FORMATS else "mp4"
+
+
 def resolve_download_filename(
     params: dict,
     *,
@@ -429,9 +513,9 @@ def resolve_download_filename(
 ) -> str:
     """Final download filename: manual name or template."""
     when = when or datetime.now()
-    ext = "mp4"
+    ext = output_extension_from_params(params)
     if params.get("name_edited"):
-        raw = str(params.get("filename") or "video.mp4").strip() or "video.mp4"
+        raw = str(params.get("filename") or f"video.{ext}").strip() or f"video.{ext}"
         stem = sanitize_filename(Path(raw).stem) or "video"
         return f"{stem}.{ext}"
     tpl = str(params.get("filename_template") or DEFAULT_FILENAME_TEMPLATE)
@@ -2453,24 +2537,26 @@ def find_yt_dlp() -> Path | None:
     return Path(found) if found else None
 
 
-def ensure_yt_dlp(events: queue.Queue | None = None) -> Path:
-    existing = find_yt_dlp()
-    if existing is not None:
-        return existing
-    # AppImage / frozen _MEIPASS is often read-only — download into writable APP_DIR/bin.
-    target = YTDLP_PATH
+def _yt_dlp_download_target() -> Path:
+    """Writable path for a managed yt-dlp binary (never overwrite system /usr/bin)."""
+    target = APP_DIR / "bin" / YTDLP_BIN
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
-        if not os.access(target.parent, os.W_OK):
-            raise OSError("bin not writable")
+        if os.access(target.parent, os.W_OK):
+            return target
     except OSError:
-        target = APP_DIR / "bin" / YTDLP_BIN
-        target.parent.mkdir(parents=True, exist_ok=True)
+        pass
+    fallback = Path(tempfile.gettempdir()) / "hls-downloader-bin"
+    fallback.mkdir(parents=True, exist_ok=True)
+    return fallback / YTDLP_BIN
+
+
+def download_yt_dlp_binary(events: queue.Queue | None = None) -> Path:
+    """Fetch latest yt-dlp standalone binary into a writable location."""
+    target = _yt_dlp_download_target()
     if events is not None:
         events.put(("status", "Скачиваю yt-dlp…"))
-        events.put(("log", "Нужен yt-dlp, чтобы разбирать страницы сайтов"))
-    # Linux: prefer standalone binary — the plain "yt-dlp" asset is a Python zipapp
-    # that breaks under PyInstaller/AppImage LD_LIBRARY_PATH.
+        events.put(("log", "Обновляю yt-dlp с GitHub releases"))
     asset = "yt-dlp.exe" if IS_WINDOWS else "yt-dlp_linux"
     url = f"https://github.com/yt-dlp/yt-dlp/releases/latest/download/{asset}"
     request = urllib.request.Request(url, headers={"User-Agent": DEFAULT_UA})
@@ -2480,6 +2566,13 @@ def ensure_yt_dlp(events: queue.Queue | None = None) -> Path:
     if not IS_WINDOWS:
         target.chmod(target.stat().st_mode | 0o111)
     return target
+
+
+def ensure_yt_dlp(events: queue.Queue | None = None) -> Path:
+    existing = find_yt_dlp()
+    if existing is not None:
+        return existing
+    return download_yt_dlp_binary(events)
 
 
 def open_path(target: str | Path) -> None:
@@ -2904,6 +2997,10 @@ def verify_mp4_file(path: Path, expected_size: int | None = None) -> str | None:
         return "Файл слишком маленький"
     if expected_size and abs(size - expected_size) > max(64, expected_size // 1000):
         return f"Размер не совпал: {fmt_size(size)} вместо {fmt_size(expected_size)}"
+    suffix = path.suffix.lower()
+    # Audio / Matroska / WebM — size check is enough.
+    if suffix in {".m4a", ".mp3", ".opus", ".flac", ".mkv", ".webm", ".ogg", ".wav"}:
+        return None
     try:
         head = path.read_bytes()[:64]
     except OSError as exc:
@@ -2913,6 +3010,72 @@ def verify_mp4_file(path: Path, expected_size: int | None = None) -> str | None:
         if b"ftyp" not in head:
             return "Нет сигнатуры MP4 (ftyp)"
     return None
+
+
+def parse_timecode_seconds(raw: str) -> float | None:
+    """Parse '90', '1:30', '01:02:03' into seconds."""
+    text = (raw or "").strip().replace(",", ".")
+    if not text:
+        return None
+    if re.fullmatch(r"\d+(\.\d+)?", text):
+        value = float(text)
+        return value if value >= 0 else None
+    parts = text.split(":")
+    if not 2 <= len(parts) <= 3:
+        return None
+    try:
+        nums = [float(p) for p in parts]
+    except ValueError:
+        return None
+    if len(nums) == 2:
+        minutes, seconds = nums
+        return minutes * 60 + seconds
+    hours, minutes, seconds = nums
+    return hours * 3600 + minutes * 60 + seconds
+
+
+def build_download_section(
+    limit_seconds: int | None,
+    section_start: float | None,
+    section_end: float | None,
+) -> str | None:
+    """yt-dlp --download-sections value, or None."""
+    if section_start is not None or section_end is not None:
+        start = 0.0 if section_start is None else max(0.0, float(section_start))
+        if section_end is not None and float(section_end) > start:
+            return f"*{start}-{float(section_end)}"
+        if limit_seconds:
+            return f"*{start}-{start + float(limit_seconds)}"
+        return f"*{start}-inf"
+    if limit_seconds:
+        return f"*0-{limit_seconds}"
+    return None
+
+
+def system_notify(title: str, body: str = "") -> None:
+    """Best-effort desktop notification (Linux notify-send / macOS)."""
+    try:
+        if IS_WINDOWS:
+            return
+        if IS_MAC and shutil.which("osascript"):
+            script = f'display notification {json.dumps(body or title)} with title {json.dumps(title)}'
+            subprocess.Popen(
+                ["osascript", "-e", script],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=CREATE_NO_WINDOW,
+            )
+            return
+        if shutil.which("notify-send"):
+            subprocess.Popen(
+                ["notify-send", "--app-name=HLS Downloader", title, body or title],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                env=host_env(),
+                creationflags=CREATE_NO_WINDOW,
+            )
+    except Exception:
+        pass
 
 
 def ytdlp_entry_url(entry: dict, base_url: str = "") -> str | None:
@@ -4378,19 +4541,41 @@ def download_with_ytdlp(
     threads: int = DEFAULT_THREADS,
     audio_multistreams: bool = False,
     use_fast_youtube_client: bool = True,
+    merge_format: str = "mp4",
+    audio_only: bool = False,
+    audio_format: str = "m4a",
+    write_subs: bool = False,
+    embed_subs: bool = False,
+    sub_langs: str = "en.*,ru.*,.*-orig",
+    embed_metadata: bool = False,
+    embed_thumbnail: bool = False,
+    rate_limit: str = "",
+    section_start: float | None = None,
+    section_end: float | None = None,
+    cookies_from_browser: str = "",
+    sponsorblock_remove: bool = False,
 ) -> None:
     ytdlp = ensure_yt_dlp(events)
     ffmpeg = find_ffmpeg()
     workers = clamp_threads(threads)
+    merge_format = (merge_format or "mp4").strip().lower()
+    if merge_format not in MERGE_FORMATS:
+        merge_format = "mp4"
+    audio_format = (audio_format or "m4a").strip().lower()
+    if audio_format not in AUDIO_FORMATS:
+        audio_format = "m4a"
     # VK progressive url* is single-connection and slow; force HLS when caller still
     # passes the generic YouTube-style selector.
-    if is_vk_url(page_url) and (not format_spec or format_spec in {"bv*+ba/b", "best", "b"}):
-        format_spec = "b[protocol^=m3u8]/bv*[protocol^=m3u8]+ba/bv*+ba/b"
-    # Prefer H.264 progressive over AV1 — wider remux/player compatibility.
-    if is_eporner_url(page_url) and (not format_spec or format_spec in {"bv*+ba/b", "best", "b"}):
-        format_spec = "1080p_HD/720p_HD/480p/360p/240p/best[format_id!*=av1]/best"
-    if is_youtube_url(page_url) and not audio_multistreams:
-        format_spec = youtube_safe_format(format_spec)
+    if not audio_only:
+        if is_vk_url(page_url) and (not format_spec or format_spec in {"bv*+ba/b", "best", "b"}):
+            format_spec = "b[protocol^=m3u8]/bv*[protocol^=m3u8]+ba/bv*+ba/b"
+        # Prefer H.264 progressive over AV1 — wider remux/player compatibility.
+        if is_eporner_url(page_url) and (not format_spec or format_spec in {"bv*+ba/b", "best", "b"}):
+            format_spec = "1080p_HD/720p_HD/480p/360p/240p/best[format_id!*=av1]/best"
+        if is_youtube_url(page_url) and not audio_multistreams:
+            format_spec = youtube_safe_format(format_spec)
+    else:
+        format_spec = "ba/b"
 
     try:
         proxy_norm = normalize_proxy_url(proxy) if proxy.strip() else ""
@@ -4399,7 +4584,9 @@ def download_with_ytdlp(
 
     # YouTube attempts: web+m4a first (full quality). Android clients often only expose 360p.
     attempts: list[tuple[str, bool, str | None]] = []
-    if is_youtube_url(page_url) and not audio_multistreams:
+    if audio_only:
+        attempts.append((format_spec or "ba/b", False, None))
+    elif is_youtube_url(page_url) and not audio_multistreams:
         primary = format_spec or YTDLP_YT_FORMAT_BEST
         attempts.append((primary, False, None))
         attempts.append((primary, True, "android,tv,mweb"))
@@ -4410,6 +4597,7 @@ def download_with_ytdlp(
 
     template = output.with_suffix("")
     last_error = ""
+    media_suffixes = {".mp4", ".mkv", ".webm", ".mov", ".m4a", ".mp3", ".opus", ".flac", ".ogg"}
     for attempt_index, (fmt, fast_client, client_args) in enumerate(attempts):
         if cancel.is_set():
             events.put(("done", {"cancelled": True, "output": str(output), "vod": True}))
@@ -4424,8 +4612,6 @@ def download_with_ytdlp(
             "--no-warnings",
             "-f",
             fmt,
-            "--merge-output-format",
-            "mp4",
             "-N",
             str(workers),
             "--concurrent-fragments",
@@ -4442,14 +4628,32 @@ def download_with_ytdlp(
             str(template) + ".%(ext)s",
             "--newline",
         ]
-        if not audio_multistreams:
-            command += ["--remux-video", "mp4"]
+        if audio_only:
+            command += ["-x", "--audio-format", audio_format, "--audio-quality", "0"]
+        else:
+            command += ["--merge-output-format", merge_format]
+            if not audio_multistreams:
+                command += ["--remux-video", merge_format]
         if audio_multistreams:
             command.append("--audio-multistreams")
-        if is_youtube_url(page_url) and fast_client and not audio_multistreams:
+        if write_subs or embed_subs:
+            command += ["--write-subs", "--write-auto-subs", "--sub-langs", sub_langs or "all"]
+            command += ["--convert-subs", "srt"]
+        if embed_subs:
+            command.append("--embed-subs")
+        if embed_metadata:
+            command.append("--embed-metadata")
+        if embed_thumbnail:
+            command += ["--write-thumbnail", "--embed-thumbnail"]
+        if sponsorblock_remove and is_youtube_url(page_url):
+            command += ["--sponsorblock-remove", "sponsor,selfpromo,interaction"]
+        rate = (rate_limit or "").strip()
+        if rate:
+            command += ["--limit-rate", rate]
+        if is_youtube_url(page_url) and fast_client and not audio_multistreams and not audio_only:
             extractor = f"youtube:player_client={client_args}" if client_args else YTDLP_YT_FAST_CLIENT
             command += ["--extractor-args", extractor]
-        aria2 = None if prefers_ytdlp_download(page_url) else find_aria2c()
+        aria2 = None if prefers_ytdlp_download(page_url) or audio_only else find_aria2c()
         if aria2 is not None:
             conn = min(16, workers)
             command += [
@@ -4460,7 +4664,7 @@ def download_with_ytdlp(
             ]
             events.put(("log", f"Режим: yt-dlp + aria2c · {conn} соединений"))
         else:
-            mode = "мультиаудио" if audio_multistreams else "yt-dlp"
+            mode = "аудио" if audio_only else ("мультиаудио" if audio_multistreams else "yt-dlp")
             events.put(("log", f"Режим: {mode} · {workers} фрагментов параллельно"))
             events.put(("log", f"Формат: {fmt}" + (f" · клиент {client_args}" if client_args else "")))
         if ffmpeg is not None:
@@ -4471,11 +4675,16 @@ def download_with_ytdlp(
             command += ["--referer", headers["Referer"]]
         command += ytdlp_header_args(headers)
         cookies_file = str(getattr(_DOWNLOAD_CTX, "cookies", "") or "")
-        command += ytdlp_cookies_args(cookies_file)
+        browser = (cookies_from_browser or "").strip().lower()
+        if browser and browser in BROWSER_COOKIE_CHOICES and browser:
+            command += ["--cookies-from-browser", browser]
+        else:
+            command += ytdlp_cookies_args(cookies_file)
         if proxy_norm:
             command += ["--proxy", proxy_norm]
-        if limit_seconds:
-            command += ["--download-sections", f"*0-{limit_seconds}"]
+        section = build_download_section(limit_seconds, section_start, section_end)
+        if section:
+            command += ["--download-sections", section]
         command.append(page_url)
         if attempt_index:
             events.put(("log", f"Повтор YouTube ({attempt_index + 1}/{len(attempts)})…"))
@@ -4544,11 +4753,11 @@ def download_with_ytdlp(
                 key=lambda path: path.stat().st_mtime,
                 reverse=True,
             ):
-                if candidate.suffix.lower() in {".mp4", ".mkv", ".webm", ".mov"}:
+                if candidate.suffix.lower() in media_suffixes:
                     produced = candidate
                     break
             if produced is None:
-                last_error = "yt-dlp не создал видеофайл"
+                last_error = "yt-dlp не создал медиафайл"
                 continue
             if produced.resolve() != output.resolve():
                 if output.exists():
@@ -5232,6 +5441,19 @@ def _download_job_inner(
                 threads=params.get("threads", DEFAULT_THREADS),
                 audio_multistreams=bool(params.get("audio_multistreams")),
                 use_fast_youtube_client=bool(params.get("use_fast_youtube_client", True)),
+                merge_format=str(params.get("merge_format") or "mp4"),
+                audio_only=bool(params.get("audio_only")),
+                audio_format=str(params.get("audio_format") or "m4a"),
+                write_subs=bool(params.get("write_subs")),
+                embed_subs=bool(params.get("embed_subs")),
+                sub_langs=str(params.get("sub_langs") or "en.*,ru.*,.*-orig"),
+                embed_metadata=bool(params.get("embed_metadata")),
+                embed_thumbnail=bool(params.get("embed_thumbnail")),
+                rate_limit=str(params.get("rate_limit") or ""),
+                section_start=params.get("section_start"),
+                section_end=params.get("section_end"),
+                cookies_from_browser=str(params.get("cookies_from_browser") or ""),
+                sponsorblock_remove=bool(params.get("sponsorblock")),
             )
             return
 
@@ -5712,6 +5934,54 @@ I18N: dict[str, dict[str, str]] = {
         "hint_need_ffmpeg": "Не найден ffmpeg. Установите: sudo pacman -S ffmpeg",
         "hint_need_ytdlp": "Не найден yt-dlp. Установите: sudo pacman -S yt-dlp",
         "hint_need_zenity": "Для системных диалогов папок: sudo pacman -S zenity",
+        "download_opts": "Скачивание",
+        "merge_format": "Контейнер",
+        "audio_only": "Только аудио",
+        "audio_format": "Формат аудио",
+        "write_subs": "Скачать субтитры",
+        "embed_subs": "Вшить субтитры",
+        "embed_metadata": "Метаданные в файл",
+        "embed_thumbnail": "Обложка в файл",
+        "sponsorblock": "SponsorBlock (YouTube)",
+        "rate_limit": "Лимит скорости",
+        "rate_limit_help": "Например 2M или 500K. Пусто = без лимита.",
+        "trim_start": "Начало (сек)",
+        "trim_end": "Конец (сек)",
+        "trim_help": "Обрезка: секунды или 1:30 / 01:02:03. Пусто = целиком.",
+        "cookies_browser": "Cookies из браузера",
+        "cookies_browser_help": "Вместо файла: chrome / firefox / edge… Нужен закрытый браузер или профиль без блокировки.",
+        "site_profile": "Пресет сайта",
+        "profile_default": "Обычный",
+        "profile_youtube": "YouTube",
+        "profile_pornhub": "Pornhub",
+        "profile_live": "Эфир / live",
+        "profile_audio": "Только аудио",
+        "apply_profile": "Применить",
+        "post_actions": "После скачивания",
+        "post_open_folder": "Открыть папку",
+        "post_open_file": "Открыть файл",
+        "post_system_notify": "Системное уведомление",
+        "minimize_tray": "Сворачивать вместо выхода",
+        "queue_pause": "Пауза очереди",
+        "queue_resume": "Продолжить очередь",
+        "schedule_time": "Старт очереди в",
+        "schedule_help": "ЧЧ:ММ — очередь сама продолжится в это время (сегодня/завтра).",
+        "batch_title": "Пакет ссылок",
+        "batch_help": "По одной ссылке на строку.",
+        "batch_add": "Добавить в очередь",
+        "update_ytdlp": "Обновить yt-dlp",
+        "update_ytdlp_ok": "yt-dlp обновлён: {path}",
+        "update_ytdlp_fail": "Не удалось обновить yt-dlp: {err}",
+        "export_settings": "Экспорт настроек",
+        "import_settings": "Импорт настроек",
+        "export_queue": "Экспорт очереди",
+        "import_queue": "Импорт очереди",
+        "export_ok": "Сохранено: {path}",
+        "import_ok": "Импортировано",
+        "dup_skipped": "Уже в очереди · пропущено {n}",
+        "tray_show": "Показать",
+        "tray_quit": "Выход",
+        "version_label": "Версия {v}",
     },
     LANG_EN: {
         "settings_sub": "Appearance, language, folder, filename template, proxy, User-Agent and cookies",
@@ -5852,6 +6122,54 @@ I18N: dict[str, dict[str, str]] = {
         "hint_need_ffmpeg": "ffmpeg not found. Install: sudo pacman -S ffmpeg",
         "hint_need_ytdlp": "yt-dlp not found. Install: sudo pacman -S yt-dlp",
         "hint_need_zenity": "For native folder dialogs: sudo pacman -S zenity",
+        "download_opts": "Download",
+        "merge_format": "Container",
+        "audio_only": "Audio only",
+        "audio_format": "Audio format",
+        "write_subs": "Download subtitles",
+        "embed_subs": "Embed subtitles",
+        "embed_metadata": "Embed metadata",
+        "embed_thumbnail": "Embed thumbnail",
+        "sponsorblock": "SponsorBlock (YouTube)",
+        "rate_limit": "Rate limit",
+        "rate_limit_help": "e.g. 2M or 500K. Empty = unlimited.",
+        "trim_start": "Start (sec)",
+        "trim_end": "End (sec)",
+        "trim_help": "Trim: seconds or 1:30 / 01:02:03. Empty = full.",
+        "cookies_browser": "Cookies from browser",
+        "cookies_browser_help": "Instead of a file: chrome / firefox / edge… Browser may need to be closed.",
+        "site_profile": "Site preset",
+        "profile_default": "Default",
+        "profile_youtube": "YouTube",
+        "profile_pornhub": "Pornhub",
+        "profile_live": "Live",
+        "profile_audio": "Audio only",
+        "apply_profile": "Apply",
+        "post_actions": "After download",
+        "post_open_folder": "Open folder",
+        "post_open_file": "Open file",
+        "post_system_notify": "System notification",
+        "minimize_tray": "Minimize instead of quit",
+        "queue_pause": "Pause queue",
+        "queue_resume": "Resume queue",
+        "schedule_time": "Resume queue at",
+        "schedule_help": "HH:MM — queue resumes automatically at that time.",
+        "batch_title": "Batch URLs",
+        "batch_help": "One URL per line.",
+        "batch_add": "Add to queue",
+        "update_ytdlp": "Update yt-dlp",
+        "update_ytdlp_ok": "yt-dlp updated: {path}",
+        "update_ytdlp_fail": "yt-dlp update failed: {err}",
+        "export_settings": "Export settings",
+        "import_settings": "Import settings",
+        "export_queue": "Export queue",
+        "import_queue": "Import queue",
+        "export_ok": "Saved: {path}",
+        "import_ok": "Imported",
+        "dup_skipped": "Already queued · skipped {n}",
+        "tray_show": "Show",
+        "tray_quit": "Quit",
+        "version_label": "Version {v}",
     },
 }
 
@@ -7111,6 +7429,7 @@ class App(tk.Tk):
         self._restore_geometry()
         self.after(100, self._poll)
         self.after(400, self._warn_linux_deps)
+        self.after(15_000, self._check_schedule)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
     def _warn_linux_deps(self) -> None:
@@ -7194,6 +7513,10 @@ class App(tk.Tk):
         self.clear_btn.pack(side="right", padx=(0, 4))
         self.history_btn = make_nav_chip(brand_row, _("history"), t, self.open_history)
         self.history_btn.pack(side="right", padx=(0, 4))
+        self.batch_btn = make_nav_chip(brand_row, _("batch_title"), t, self.open_batch_dialog)
+        self.batch_btn.pack(side="right", padx=(0, 4))
+        self.pause_btn = make_nav_chip(brand_row, _("queue_pause"), t, self.toggle_queue_pause)
+        self.pause_btn.pack(side="right", padx=(0, 4))
         self.proxy_chip = make_nav_chip(brand_row, _("proxy_off"), t, self.open_settings)
         self.proxy_chip.pack(side="right", padx=(0, 4))
 
@@ -7235,6 +7558,7 @@ class App(tk.Tk):
         self.url_entry.bind("<FocusOut>", self._url_focus_out)
         self.url_entry.bind("<Return>", lambda _e: self.start_download())
         self._bind_clipboard_shortcuts()
+        self._bind_app_hotkeys()
         self._menu = tk.Menu(self, tearoff=0)
         self._menu.add_command(label=_("paste"), command=self.paste_url)
         self._menu.add_command(label=_("copy"), command=self._copy_url)
@@ -7333,6 +7657,41 @@ class App(tk.Tk):
         self.notify_var = tk.BooleanVar(
             value=bool(self.settings["notify"]) if "notify" in self.settings else True
         )
+        self.merge_format_var = tk.StringVar(
+            value=str(self.settings.get("merge_format") or "mp4")
+            if str(self.settings.get("merge_format") or "mp4") in MERGE_FORMATS
+            else "mp4"
+        )
+        self.audio_only_var = tk.BooleanVar(value=bool(self.settings.get("audio_only")))
+        audio_fmt = str(self.settings.get("audio_format") or "m4a")
+        self.audio_format_var = tk.StringVar(value=audio_fmt if audio_fmt in AUDIO_FORMATS else "m4a")
+        self.write_subs_var = tk.BooleanVar(value=bool(self.settings.get("write_subs")))
+        self.embed_subs_var = tk.BooleanVar(value=bool(self.settings.get("embed_subs")))
+        self.embed_metadata_var = tk.BooleanVar(
+            value=bool(self.settings["embed_metadata"]) if "embed_metadata" in self.settings else True
+        )
+        self.embed_thumbnail_var = tk.BooleanVar(value=bool(self.settings.get("embed_thumbnail")))
+        self.sponsorblock_var = tk.BooleanVar(value=bool(self.settings.get("sponsorblock")))
+        self.rate_limit_var = tk.StringVar(value=str(self.settings.get("rate_limit") or ""))
+        self.trim_start_var = tk.StringVar(value=str(self.settings.get("trim_start") or ""))
+        self.trim_end_var = tk.StringVar(value=str(self.settings.get("trim_end") or ""))
+        browser_ck = str(self.settings.get("cookies_from_browser") or "")
+        self.cookies_browser_var = tk.StringVar(
+            value=browser_ck if browser_ck in BROWSER_COOKIE_CHOICES else ""
+        )
+        self.site_profile_var = tk.StringVar(value=str(self.settings.get("site_profile") or "default"))
+        self.post_open_folder_var = tk.BooleanVar(value=bool(self.settings.get("post_open_folder")))
+        self.post_open_file_var = tk.BooleanVar(value=bool(self.settings.get("post_open_file")))
+        self.post_system_notify_var = tk.BooleanVar(
+            value=bool(self.settings["post_system_notify"])
+            if "post_system_notify" in self.settings
+            else True
+        )
+        self.minimize_tray_var = tk.BooleanVar(value=bool(self.settings.get("minimize_tray")))
+        self.schedule_time_var = tk.StringVar(value=str(self.settings.get("schedule_time") or ""))
+        self.queue_paused = False
+        self._tray_icon = None
+        self._force_quit = False
         self.quality_var = tk.StringVar(value="Авто (лучшее)")
         self.audio_var = tk.StringVar(value="По умолчанию")
         self.extra_storage = self.settings.get("extra") or ""
@@ -8421,6 +8780,159 @@ class App(tk.Tk):
             justify="left",
         ).pack(fill="x", pady=(6, 0))
 
+        # Download options: container, audio, subs, trim, rate, profiles
+        dl_box = section(_("download_opts"))
+        profile_row = tk.Frame(dl_box, bg=t["card"])
+        profile_row.pack(fill="x", pady=(0, 8))
+        tk.Label(
+            profile_row,
+            text=_("site_profile"),
+            bg=t["card"],
+            fg=t["muted"],
+            font=("Segoe UI", 9),
+            width=14,
+            anchor="w",
+        ).pack(side="left")
+        profile_labels = {
+            "default": _("profile_default"),
+            "youtube": _("profile_youtube"),
+            "pornhub": _("profile_pornhub"),
+            "live": _("profile_live"),
+            "audio": _("profile_audio"),
+        }
+        profile_combo = ttk.Combobox(
+            profile_row,
+            state="readonly",
+            values=[profile_labels[k] for k in SITE_PROFILES],
+            width=22,
+            style="Metro.TCombobox",
+        )
+        key_to_label = profile_labels
+        label_to_key = {v: k for k, v in key_to_label.items()}
+        profile_combo.set(key_to_label.get(self.site_profile_var.get(), key_to_label["default"]))
+        profile_combo.pack(side="left")
+
+        def apply_profile() -> None:
+            key = label_to_key.get(profile_combo.get(), "default")
+            self.apply_site_profile(key)
+            profile_combo.set(key_to_label.get(key, key_to_label["default"]))
+
+        ttk.Button(profile_row, text=_("apply_profile"), command=apply_profile).pack(side="left", padx=(8, 0))
+
+        fmt_row = tk.Frame(dl_box, bg=t["card"])
+        fmt_row.pack(fill="x", pady=(0, 6))
+        tk.Label(fmt_row, text=_("merge_format"), bg=t["card"], fg=t["muted"], font=("Segoe UI", 9), width=14, anchor="w").pack(
+            side="left"
+        )
+        ttk.Combobox(
+            fmt_row,
+            textvariable=self.merge_format_var,
+            values=list(MERGE_FORMATS),
+            width=10,
+            state="readonly",
+            style="Metro.TCombobox",
+        ).pack(side="left")
+        ttk.Checkbutton(fmt_row, text=_("audio_only"), variable=self.audio_only_var).pack(side="left", padx=(16, 0))
+        ttk.Combobox(
+            fmt_row,
+            textvariable=self.audio_format_var,
+            values=list(AUDIO_FORMATS),
+            width=8,
+            state="readonly",
+            style="Metro.TCombobox",
+        ).pack(side="left", padx=(8, 0))
+
+        ttk.Checkbutton(dl_box, text=_("write_subs"), variable=self.write_subs_var).pack(anchor="w", pady=(4, 0))
+        ttk.Checkbutton(dl_box, text=_("embed_subs"), variable=self.embed_subs_var).pack(anchor="w", pady=(4, 0))
+        ttk.Checkbutton(dl_box, text=_("embed_metadata"), variable=self.embed_metadata_var).pack(anchor="w", pady=(4, 0))
+        ttk.Checkbutton(dl_box, text=_("embed_thumbnail"), variable=self.embed_thumbnail_var).pack(anchor="w", pady=(4, 0))
+        ttk.Checkbutton(dl_box, text=_("sponsorblock"), variable=self.sponsorblock_var).pack(anchor="w", pady=(4, 0))
+
+        rate_row = tk.Frame(dl_box, bg=t["card"])
+        rate_row.pack(fill="x", pady=(8, 2))
+        tk.Label(rate_row, text=_("rate_limit"), bg=t["card"], fg=t["muted"], font=("Segoe UI", 9), width=14, anchor="w").pack(
+            side="left"
+        )
+        ttk.Entry(rate_row, textvariable=self.rate_limit_var, width=12).pack(side="left")
+        tk.Label(
+            dl_box,
+            text=_("rate_limit_help"),
+            bg=t["card"],
+            fg=t["muted"],
+            font=(UI_FONT, 8),
+            anchor="w",
+        ).pack(fill="x", pady=(0, 6))
+
+        trim_row = tk.Frame(dl_box, bg=t["card"])
+        trim_row.pack(fill="x", pady=(0, 2))
+        tk.Label(trim_row, text=_("trim_start"), bg=t["card"], fg=t["muted"], font=("Segoe UI", 9), width=14, anchor="w").pack(
+            side="left"
+        )
+        ttk.Entry(trim_row, textvariable=self.trim_start_var, width=10).pack(side="left")
+        tk.Label(trim_row, text=_("trim_end"), bg=t["card"], fg=t["muted"], font=("Segoe UI", 9)).pack(side="left", padx=(12, 6))
+        ttk.Entry(trim_row, textvariable=self.trim_end_var, width=10).pack(side="left")
+        tk.Label(
+            dl_box,
+            text=_("trim_help"),
+            bg=t["card"],
+            fg=t["muted"],
+            font=(UI_FONT, 8),
+            anchor="w",
+            wraplength=560,
+            justify="left",
+        ).pack(fill="x", pady=(0, 8))
+
+        sched_row = tk.Frame(dl_box, bg=t["card"])
+        sched_row.pack(fill="x", pady=(0, 2))
+        tk.Label(
+            sched_row,
+            text=_("schedule_time"),
+            bg=t["card"],
+            fg=t["muted"],
+            font=("Segoe UI", 9),
+            width=14,
+            anchor="w",
+        ).pack(side="left")
+        ttk.Entry(sched_row, textvariable=self.schedule_time_var, width=8).pack(side="left")
+        tk.Label(
+            dl_box,
+            text=_("schedule_help"),
+            bg=t["card"],
+            fg=t["muted"],
+            font=(UI_FONT, 8),
+            anchor="w",
+            wraplength=560,
+            justify="left",
+        ).pack(fill="x", pady=(0, 8))
+
+        post_box = section(_("post_actions"))
+        ttk.Checkbutton(post_box, text=_("post_open_folder"), variable=self.post_open_folder_var).pack(anchor="w")
+        ttk.Checkbutton(post_box, text=_("post_open_file"), variable=self.post_open_file_var).pack(anchor="w", pady=(4, 0))
+        ttk.Checkbutton(post_box, text=_("post_system_notify"), variable=self.post_system_notify_var).pack(
+            anchor="w", pady=(4, 0)
+        )
+        ttk.Checkbutton(post_box, text=_("minimize_tray"), variable=self.minimize_tray_var).pack(anchor="w", pady=(4, 0))
+
+        tools_row = tk.Frame(post_box, bg=t["card"])
+        tools_row.pack(fill="x", pady=(10, 0))
+        ttk.Button(tools_row, text=_("update_ytdlp"), command=lambda: self.update_yt_dlp_async(win)).pack(side="left")
+        ttk.Button(tools_row, text=_("export_settings"), command=self.export_settings_dialog).pack(side="left", padx=(8, 0))
+        ttk.Button(tools_row, text=_("import_settings"), command=lambda: self.import_settings_dialog(win)).pack(
+            side="left", padx=(8, 0)
+        )
+        tools_row2 = tk.Frame(post_box, bg=t["card"])
+        tools_row2.pack(fill="x", pady=(6, 0))
+        ttk.Button(tools_row2, text=_("export_queue"), command=self.export_queue_dialog).pack(side="left")
+        ttk.Button(tools_row2, text=_("import_queue"), command=self.import_queue_dialog).pack(side="left", padx=(8, 0))
+        tk.Label(
+            post_box,
+            text=_("version_label", v=APP_VERSION),
+            bg=t["card"],
+            fg=t["muted"],
+            font=(UI_FONT, 8),
+            anchor="w",
+        ).pack(fill="x", pady=(10, 0))
+
         cookies_box = section(_("cookies"))
         tk.Label(
             cookies_box,
@@ -8447,6 +8959,45 @@ class App(tk.Tk):
 
         ttk.Button(cookies_row, text=_("browse"), command=browse_cookies).pack(side="left", padx=(8, 0))
         ttk.Button(cookies_row, text=_("remove"), command=lambda: self.cookies_var.set("")).pack(side="left", padx=(6, 0))
+
+        browser_row = tk.Frame(cookies_box, bg=t["card"])
+        browser_row.pack(fill="x", pady=(10, 0))
+        tk.Label(
+            browser_row,
+            text=_("cookies_browser"),
+            bg=t["card"],
+            fg=t["muted"],
+            font=("Segoe UI", 9),
+            width=18,
+            anchor="w",
+        ).pack(side="left")
+        browser_values = ["—"] + [b for b in BROWSER_COOKIE_CHOICES if b]
+        browser_combo = ttk.Combobox(
+            browser_row,
+            values=browser_values,
+            width=14,
+            state="readonly",
+            style="Metro.TCombobox",
+        )
+        current_browser = self.cookies_browser_var.get() or "—"
+        browser_combo.set(current_browser if current_browser in browser_values else "—")
+        browser_combo.pack(side="left")
+
+        def on_browser(_event=None) -> None:
+            picked = browser_combo.get()
+            self.cookies_browser_var.set("" if picked in {"—", ""} else picked)
+
+        browser_combo.bind("<<ComboboxSelected>>", on_browser)
+        tk.Label(
+            cookies_box,
+            text=_("cookies_browser_help"),
+            bg=t["card"],
+            fg=t["muted"],
+            font=(UI_FONT, 8),
+            anchor="w",
+            wraplength=540,
+            justify="left",
+        ).pack(fill="x", pady=(6, 0))
 
         # Advanced — filename comes from the template in General, not a fixed name here.
         advanced = section(_("advanced"))
@@ -8791,6 +9342,12 @@ class App(tk.Tk):
             proxy = self._resolved_proxy()
         except PlaylistError:
             proxy = self.proxy_var.get().strip()
+        merge = self.merge_format_var.get().strip().lower()
+        if merge not in MERGE_FORMATS:
+            merge = "mp4"
+        audio_fmt = self.audio_format_var.get().strip().lower()
+        if audio_fmt not in AUDIO_FORMATS:
+            audio_fmt = "m4a"
         return {
             "source": self._url_text(),
             "choice_url": self._choice_url(),
@@ -8806,11 +9363,23 @@ class App(tk.Tk):
             "extra": self.extra_text.get("1.0", "end"),
             "proxy": proxy,
             "cookies": self._cookies_path(),
+            "cookies_from_browser": self.cookies_browser_var.get().strip(),
             "insecure": bool(self.insecure_var.get()),
             "limit_seconds": limit_seconds,
+            "section_start": parse_timecode_seconds(self.trim_start_var.get()),
+            "section_end": parse_timecode_seconds(self.trim_end_var.get()),
             "threads": clamp_threads(self.threads_var.get()),
             "direct_threads": clamp_threads(self.direct_threads_var.get()),
             "concurrent": clamp_concurrent(self.concurrent_var.get()),
+            "merge_format": merge,
+            "audio_only": bool(self.audio_only_var.get()),
+            "audio_format": audio_fmt,
+            "write_subs": bool(self.write_subs_var.get()),
+            "embed_subs": bool(self.embed_subs_var.get()),
+            "embed_metadata": bool(self.embed_metadata_var.get()),
+            "embed_thumbnail": bool(self.embed_thumbnail_var.get()),
+            "sponsorblock": bool(self.sponsorblock_var.get()),
+            "rate_limit": self.rate_limit_var.get().strip(),
         }
 
     def _refresh_queue_buttons(self) -> None:
@@ -8862,9 +9431,12 @@ class App(tk.Tk):
             )
 
     def start_download(self) -> None:
-        """Add URLs to the queue and fetch metadata (no download yet)."""
-        params = self._snapshot()
-        urls = parse_url_list(params["source"])
+        """Add URLs from the composer field to the queue (metadata only)."""
+        self.add_urls(parse_url_list(self._url_text()), clear_entry=True)
+
+    def add_urls(self, urls: list[str], *, clear_entry: bool = False) -> None:
+        """Add URL list to the queue; skip duplicates already present."""
+        urls = [u.strip() for u in urls if u and u.strip()]
         if not urls:
             messagebox.showinfo(_("no_link"), _("no_link_body"))
             return
@@ -8874,10 +9446,10 @@ class App(tk.Tk):
         self._persist()
         self.empty_wrap.pack_forget()
         for url in urls:
-            if url.strip() in existing:
+            if url in existing:
                 skipped += 1
                 continue
-            existing.add(url.strip())
+            existing.add(url)
             index = len(self._cards)
             card = DownloadCard(self.cards_frame, self, index, url)
             card.pack(fill="x", pady=8)
@@ -8885,16 +9457,17 @@ class App(tk.Tk):
             self._queue_items.append({"url": url, "state": "fetch", "detail": _("fetching")})
             self._start_probe(index, url)
             added += 1
-        self.url_entry.delete(0, "end")
-        self.url_entry.insert(0, self._url_placeholder)
-        self.url_entry.configure(fg=self.theme["muted"])
+        if clear_entry:
+            self.url_entry.delete(0, "end")
+            self.url_entry.insert(0, self._url_placeholder)
+            self.url_entry.configure(fg=self.theme["muted"])
         if added:
             msg = _("queue_count", n=len(self._cards))
             if skipped:
-                msg += f" · −{skipped} дубл."
+                msg += " · " + _("dup_skipped", n=skipped)
             self.status_var.set(msg)
         elif skipped:
-            self.status_var.set(f"Уже в очереди · пропущено {skipped}")
+            self.status_var.set(_("dup_skipped", n=skipped))
         self._refresh_queue_buttons()
 
     def _start_probe(self, index: int, url: str) -> None:
@@ -9182,6 +9755,9 @@ class App(tk.Tk):
             self._pump_downloads()
 
     def _pump_downloads(self) -> None:
+        if self.queue_paused:
+            self._refresh_queue_buttons()
+            return
         while self._running_count() < self._max_concurrent():
             nxt = next((i for i, c in enumerate(self._cards) if c.state == "queued"), None)
             if nxt is None:
@@ -9430,6 +10006,7 @@ class App(tk.Tk):
                                 path=out,
                                 video_title=str(card.title_var.get() or detail),
                             )
+                            self._run_post_actions(out, str(card.title_var.get() or detail))
                         else:
                             err = friendly_download_error(payload.get("error") or _("error_download"))
                             card.apply_error(err)
@@ -9512,6 +10089,12 @@ class App(tk.Tk):
         except PlaylistError:
             proxy = self.proxy_var.get().strip()
         remember = bool(self.remember_geometry_var.get())
+        merge = self.merge_format_var.get().strip().lower()
+        if merge not in MERGE_FORMATS:
+            merge = "mp4"
+        audio_fmt = self.audio_format_var.get().strip().lower()
+        if audio_fmt not in AUDIO_FORMATS:
+            audio_fmt = "m4a"
         data = {
             "output_dir": self.dir_var.get().strip(),
             "filename_template": (
@@ -9525,6 +10108,7 @@ class App(tk.Tk):
             "ua_preset": self.ua_preset_var.get(),
             "ua_spoof": bool(self.ua_spoof_var.get()) or self.ua_preset_var.get() == UA_PRESET_RANDOM,
             "cookies": self.cookies_var.get().strip(),
+            "cookies_from_browser": self.cookies_browser_var.get().strip(),
             "referer": self.referer_var.get().strip(),
             "proxy": proxy,
             "proxy_scheme": self.proxy_scheme_var.get(),
@@ -9538,17 +10122,353 @@ class App(tk.Tk):
             "remember_geometry": remember,
             "auto_clipboard": bool(self.auto_clipboard_var.get()),
             "notify": bool(self.notify_var.get()),
+            "merge_format": merge,
+            "audio_only": bool(self.audio_only_var.get()),
+            "audio_format": audio_fmt,
+            "write_subs": bool(self.write_subs_var.get()),
+            "embed_subs": bool(self.embed_subs_var.get()),
+            "embed_metadata": bool(self.embed_metadata_var.get()),
+            "embed_thumbnail": bool(self.embed_thumbnail_var.get()),
+            "sponsorblock": bool(self.sponsorblock_var.get()),
+            "rate_limit": self.rate_limit_var.get().strip(),
+            "trim_start": self.trim_start_var.get().strip(),
+            "trim_end": self.trim_end_var.get().strip(),
+            "site_profile": self.site_profile_var.get().strip() or "default",
+            "post_open_folder": bool(self.post_open_folder_var.get()),
+            "post_open_file": bool(self.post_open_file_var.get()),
+            "post_system_notify": bool(self.post_system_notify_var.get()),
+            "minimize_tray": bool(self.minimize_tray_var.get()),
+            "schedule_time": self.schedule_time_var.get().strip(),
         }
         if remember:
             data["geometry"] = self.geometry()
         save_settings(data)
 
+    def apply_site_profile(self, key: str) -> None:
+        profile = SITE_PROFILES.get(key) or SITE_PROFILES["default"]
+        self.site_profile_var.set(key)
+        if "concurrent" in profile:
+            self.concurrent_var.set(str(clamp_concurrent(profile["concurrent"])))
+        if "threads" in profile:
+            self.threads_var.set(str(clamp_threads(profile["threads"])))
+        if "direct_threads" in profile:
+            self.direct_threads_var.set(str(clamp_threads(profile["direct_threads"])))
+        if "merge_format" in profile:
+            self.merge_format_var.set(str(profile["merge_format"]))
+        if "audio_only" in profile:
+            self.audio_only_var.set(bool(profile["audio_only"]))
+        if "audio_format" in profile:
+            self.audio_format_var.set(str(profile["audio_format"]))
+        for attr, pref_key in (
+            ("write_subs_var", "write_subs"),
+            ("embed_subs_var", "embed_subs"),
+            ("embed_metadata_var", "embed_metadata"),
+            ("embed_thumbnail_var", "embed_thumbnail"),
+            ("sponsorblock_var", "sponsorblock"),
+        ):
+            if pref_key in profile:
+                getattr(self, attr).set(bool(profile[pref_key]))
+        if "rate_limit" in profile:
+            self.rate_limit_var.set(str(profile.get("rate_limit") or ""))
+        self._persist()
+        self.status_var.set(f"{_('site_profile')}: {key}")
+
+    def toggle_queue_pause(self) -> None:
+        self.queue_paused = not self.queue_paused
+        try:
+            self.pause_btn.configure(text=_("queue_resume") if self.queue_paused else _("queue_pause"))
+        except tk.TclError:
+            pass
+        if not self.queue_paused:
+            self._pump_downloads()
+        else:
+            self.status_var.set(_("queue_pause"))
+
+    def _check_schedule(self) -> None:
+        raw = (self.schedule_time_var.get() or "").strip()
+        if raw and self.queue_paused:
+            match = re.fullmatch(r"(\d{1,2}):(\d{2})", raw)
+            if match:
+                hour, minute = int(match.group(1)), int(match.group(2))
+                if 0 <= hour <= 23 and 0 <= minute <= 59:
+                    now = datetime.now()
+                    if now.hour > hour or (now.hour == hour and now.minute >= minute):
+                        # Only auto-resume if target was in the future when paused —
+                        # treat same calendar minute as fire once via flag.
+                        flag = getattr(self, "_schedule_fired_date", None)
+                        today = now.strftime("%Y-%m-%d")
+                        if flag != today:
+                            self._schedule_fired_date = today
+                            self.queue_paused = False
+                            try:
+                                self.pause_btn.configure(text=_("queue_pause"))
+                            except tk.TclError:
+                                pass
+                            self.status_var.set(_("queue_resume") + f" · {raw}")
+                            self._pump_downloads()
+        self.after(30_000, self._check_schedule)
+
+    def _run_post_actions(self, path: str, title: str) -> None:
+        out = Path(path) if path else None
+        if bool(self.post_system_notify_var.get()):
+            system_notify(_("toast_done"), title or (out.name if out else ""))
+        if out is not None and out.exists():
+            if bool(self.post_open_file_var.get()):
+                open_path(out)
+            elif bool(self.post_open_folder_var.get()):
+                open_path(out.parent)
+
+    def _bind_app_hotkeys(self) -> None:
+        self.bind_all("<Control-Return>", lambda _e: self.download_all_ready())
+        self.bind_all("<Control-Shift-V>", lambda _e: self.open_batch_dialog())
+        self.bind_all("<Control-comma>", lambda _e: self.open_settings())
+        self.bind_all("<Control-q>", lambda _e: self._quit_app())
+        self.bind_all("<Control-p>", lambda _e: self.toggle_queue_pause())
+        if IS_MAC:
+            self.bind_all("<Command-Return>", lambda _e: self.download_all_ready())
+            self.bind_all("<Command-comma>", lambda _e: self.open_settings())
+
+    def open_batch_dialog(self) -> None:
+        win = tk.Toplevel(self)
+        win.title(_("batch_title"))
+        win.transient(self)
+        win.configure(bg=self.theme["bg"])
+        center_window(win, 560, 420)
+        tk.Label(
+            win,
+            text=_("batch_help"),
+            bg=self.theme["bg"],
+            fg=self.theme["muted"],
+            font=(UI_FONT, 9),
+            anchor="w",
+        ).pack(fill="x", padx=16, pady=(14, 6))
+        text = ScrolledText(
+            win,
+            height=14,
+            font=(UI_FONT, 11),
+            bg=self.theme["input"],
+            fg=self.theme["text"],
+            insertbackground=self.theme["entry_insert"],
+            relief="flat",
+        )
+        text.pack(fill="both", expand=True, padx=16, pady=8)
+        try:
+            clip = self.clipboard_get().strip()
+            if clip and ("http://" in clip or "https://" in clip or "\n" in clip):
+                text.insert("1.0", clip)
+        except tk.TclError:
+            pass
+
+        def add_batch() -> None:
+            urls = parse_url_list(text.get("1.0", "end"))
+            if not urls:
+                messagebox.showinfo(_("no_link"), _("no_link_body"), parent=win)
+                return
+            win.destroy()
+            self.add_urls(urls)
+
+        btns = tk.Frame(win, bg=self.theme["bg"])
+        btns.pack(fill="x", padx=16, pady=(0, 14))
+        tk.Button(
+            btns,
+            text=_("batch_add"),
+            command=add_batch,
+            bg=self.theme["accent"],
+            fg=self.theme["accent_text"],
+            relief="flat",
+            padx=14,
+            pady=8,
+            cursor="hand2",
+            bd=0,
+        ).pack(side="right")
+        ttk.Button(btns, text=_("cancel"), command=win.destroy).pack(side="right", padx=(0, 8))
+
+    def update_yt_dlp_async(self, parent: tk.Misc | None = None) -> None:
+        def work() -> None:
+            try:
+                path = download_yt_dlp_binary()
+                self.after(0, lambda: messagebox.showinfo(_("update_ytdlp"), _("update_ytdlp_ok", path=str(path)), parent=parent or self))
+            except Exception as exc:
+                self.after(
+                    0,
+                    lambda: messagebox.showerror(
+                        _("update_ytdlp"),
+                        _("update_ytdlp_fail", err=str(exc)[:200]),
+                        parent=parent or self,
+                    ),
+                )
+
+        threading.Thread(target=work, daemon=True).start()
+        self.status_var.set(_("update_ytdlp") + "…")
+
+    def export_settings_dialog(self) -> None:
+        self._persist()
+        path = filedialog.asksaveasfilename(
+            parent=self,
+            title=_("export_settings"),
+            defaultextension=".json",
+            filetypes=[("JSON", "*.json")],
+            initialfile="hls-downloader-settings.json",
+        )
+        if not path:
+            return
+        try:
+            Path(path).write_text(SETTINGS_PATH.read_text(encoding="utf-8"), encoding="utf-8")
+            self.status_var.set(_("export_ok", path=path))
+        except OSError as exc:
+            messagebox.showerror(_("export_settings"), str(exc), parent=self)
+
+    def import_settings_dialog(self, parent: tk.Misc | None = None) -> None:
+        path = ask_open_filename(
+            parent=parent or self,
+            title=_("import_settings"),
+            filetypes=[("JSON", "*.json"), ("All files", "*.*")],
+        )
+        if not path:
+            return
+        try:
+            data = json.loads(Path(path).read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                raise ValueError("invalid settings")
+            save_settings(data)
+            messagebox.showinfo(_("import_settings"), _("import_ok"), parent=parent or self)
+            # Reload key vars from imported file.
+            self.settings = data
+            if data.get("output_dir"):
+                self.dir_var.set(str(data["output_dir"]))
+            if "concurrent" in data:
+                self.concurrent_var.set(str(clamp_concurrent(data["concurrent"])))
+            if "merge_format" in data:
+                self.merge_format_var.set(str(data["merge_format"]))
+            if "audio_only" in data:
+                self.audio_only_var.set(bool(data["audio_only"]))
+            if "cookies_from_browser" in data:
+                self.cookies_browser_var.set(str(data["cookies_from_browser"] or ""))
+            self.status_var.set(_("import_ok"))
+        except Exception as exc:
+            messagebox.showerror(_("import_settings"), str(exc)[:200], parent=parent or self)
+
+    def export_queue_dialog(self) -> None:
+        path = filedialog.asksaveasfilename(
+            parent=self,
+            title=_("export_queue"),
+            defaultextension=".json",
+            filetypes=[("JSON", "*.json")],
+            initialfile="hls-downloader-queue.json",
+        )
+        if not path:
+            return
+        payload = {
+            "version": APP_VERSION,
+            "urls": [c.url for c in self._cards],
+            "items": [
+                {
+                    "url": c.url,
+                    "title": c.title_var.get(),
+                    "state": c.state,
+                    "output": getattr(c, "output", None) or "",
+                }
+                for c in self._cards
+            ],
+        }
+        try:
+            Path(path).write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+            self.status_var.set(_("export_ok", path=path))
+        except OSError as exc:
+            messagebox.showerror(_("export_queue"), str(exc), parent=self)
+
+    def import_queue_dialog(self) -> None:
+        path = ask_open_filename(
+            parent=self,
+            title=_("import_queue"),
+            filetypes=[("JSON", "*.json"), ("Text", "*.txt"), ("All files", "*.*")],
+        )
+        if not path:
+            return
+        try:
+            raw = Path(path).read_text(encoding="utf-8")
+            urls: list[str] = []
+            if path.lower().endswith(".json"):
+                data = json.loads(raw)
+                if isinstance(data, dict):
+                    urls = [str(u) for u in (data.get("urls") or []) if u]
+                    if not urls and isinstance(data.get("items"), list):
+                        urls = [str(i.get("url")) for i in data["items"] if isinstance(i, dict) and i.get("url")]
+                elif isinstance(data, list):
+                    urls = [str(u) for u in data if u]
+            else:
+                urls = parse_url_list(raw)
+            if not urls:
+                messagebox.showinfo(_("no_link"), _("no_link_body"), parent=self)
+                return
+            self.add_urls(urls)
+            self.status_var.set(_("import_ok"))
+        except Exception as exc:
+            messagebox.showerror(_("import_queue"), str(exc)[:200], parent=self)
+
+    def _ensure_tray(self) -> None:
+        if self._tray_icon is not None:
+            return
+        try:
+            import pystray
+            from PIL import Image, ImageDraw
+        except ImportError:
+            self.iconify()
+            return
+
+        def _show(_icon=None, _item=None) -> None:
+            self.after(0, self._restore_from_tray)
+
+        def _quit(_icon=None, _item=None) -> None:
+            self.after(0, self._quit_app)
+
+        image = Image.new("RGB", (64, 64), color=(20, 140, 160))
+        draw = ImageDraw.Draw(image)
+        draw.rectangle((16, 16, 48, 48), fill=(255, 255, 255))
+        menu = pystray.Menu(
+            pystray.MenuItem(_("tray_show"), _show, default=True),
+            pystray.MenuItem(_("tray_quit"), _quit),
+        )
+        icon = pystray.Icon("hls-downloader", image, "HLS Downloader", menu)
+        self._tray_icon = icon
+        threading.Thread(target=icon.run, daemon=True).start()
+
+    def _restore_from_tray(self) -> None:
+        try:
+            self.deiconify()
+            self.lift()
+            self.focus_force()
+        except tk.TclError:
+            pass
+        icon = self._tray_icon
+        self._tray_icon = None
+        if icon is not None:
+            try:
+                icon.stop()
+            except Exception:
+                pass
+
+    def _quit_app(self) -> None:
+        self._force_quit = True
+        self._on_close()
+
     def _on_close(self) -> None:
+        if not self._force_quit and bool(self.minimize_tray_var.get()):
+            self.withdraw()
+            self._ensure_tray()
+            return
         busy = (self.worker and self.worker.is_alive()) or any(c.state == "run" for c in self._cards)
         if busy:
             if not messagebox.askyesno(_("exit_title"), _("exit_busy")):
                 return
             self.stop_download()
+        icon = self._tray_icon
+        self._tray_icon = None
+        if icon is not None:
+            try:
+                icon.stop()
+            except Exception:
+                pass
         try:
             self.canvas.unbind_all("<MouseWheel>")
         except tk.TclError:
